@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '../types'
 
-type Props = { item: MediaItem; onOpen: () => void; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
+type Props = { item: MediaItem; onOpen: () => void; onOpenSystem?: () => void; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
 
-export default function MediaCard({ item, onOpen, onTagClick, onModelClick }: Props) {
+export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onModelClick }: Props) {
   const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v'].includes(item.file_type.toLowerCase())
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -16,6 +16,7 @@ export default function MediaCard({ item, onOpen, onTagClick, onModelClick }: Pr
   const [imgFailed, setImgFailed] = useState<boolean>(false)
   const [beam, setBeam] = useState<string>('')
   const [sizeOverride, setSizeOverride] = useState<number | null>(null)
+  const clickTimerRef = useRef<number | null>(null)
   const aspect = useMemo(() => {
     const w = item.image_width || 0
     const h = item.image_height || 0
@@ -28,8 +29,9 @@ export default function MediaCard({ item, onOpen, onTagClick, onModelClick }: Pr
     const mb = kb / 1024
     const gb = mb / 1024
     if (gb >= 1) return `${gb.toFixed(2)}G`
-    if (mb >= 1) return `${Math.round(mb)}M`
-    return `${Math.max(1, Math.ceil(kb))}k`
+    if (mb >= 1) return `${mb.toFixed(2)}M`
+    const k = Number(kb.toFixed(2))
+    return `${(k <= 0 ? 0.01 : k).toFixed(2)}k`
   }
   const fmtDurZh = (ms?: number | null): string | null => {
     if (!ms || ms <= 0) return null
@@ -63,7 +65,17 @@ export default function MediaCard({ item, onOpen, onTagClick, onModelClick }: Pr
     const key = Date.now()
     setRipple({ x, y, key })
     setTimeout(() => setRipple(null), 600)
-    onOpen()
+    if (clickTimerRef.current) { window.clearTimeout(clickTimerRef.current); clickTimerRef.current = null }
+    clickTimerRef.current = window.setTimeout(() => {
+      onOpen()
+      clickTimerRef.current = null
+    }, 260)
+  }
+  const onDoubleClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (clickTimerRef.current) { window.clearTimeout(clickTimerRef.current); clickTimerRef.current = null }
+    onOpenSystem && onOpenSystem()
   }
   useEffect(() => {
     const el = cardRef.current
@@ -106,7 +118,7 @@ export default function MediaCard({ item, onOpen, onTagClick, onModelClick }: Pr
   }, [item.id, item.file_path, item.file_size])
   return (
     <div className="card tilt" ref={cardRef} style={{ transform: tilt }} onMouseMove={onMove} onMouseLeave={onLeave}>
-      <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} style={{ cursor:'pointer', background:'#f5f8ff', aspectRatio: aspect }}>
+      <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ cursor:'pointer', background:'#f5f8ff', aspectRatio: aspect }}>
         {(!imgLoaded || imgFailed) && <div className="img-placeholder" />}
         <img
           src={imgSrc}

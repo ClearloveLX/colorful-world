@@ -130,7 +130,6 @@ export default function Filters({ selectedModels, selectedTags, strict, order, o
                     <label key={t.id} className={`tag-chip ${selectedTags.includes(t.id) ? 'selected' : ''}`}>
                       <input type="checkbox" checked={selectedTags.includes(t.id)} onChange={() => onChange(selectedModels, toggle(selectedTags, t.id), strict)} />
                       <span>{t.name}</span>
-                      {t.category_name && <span className="muted">（{t.category_name}）</span>}
                     </label>
                   ))}
                 </div>

@@ -555,7 +555,7 @@ class ImageClassifierApp:
 
     def get_preview_image(self, path):
         ext = os.path.splitext(path)[1].lower()
-        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts'}
+        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
         if ext in video_exts:
             cap = cv2.VideoCapture(path)
             ok, frame = cap.read()
@@ -569,7 +569,7 @@ class ImageClassifierApp:
 
     def is_video_path(self, path):
         ext = os.path.splitext(path)[1].lower()
-        return ext in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}
+        return ext in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
 
     def is_gif_path(self, path):
         return os.path.splitext(path)[1].lower() == '.gif'
@@ -1526,13 +1526,13 @@ class ImageClassifierApp:
                     else:
                         last = sorted(subs)[-1]
                         last_folder = os.path.join(base_folder, last)
-                        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}
+                        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
                         try:
                             cnt = sum(1 for f in os.listdir(last_folder)
                                       if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in video_exts)
                         except Exception:
                             cnt = 0
-                        if cnt >= 100:
+                        if cnt >= 500:
                             sub_name = f"{int(last)+1:03d}"
                         else:
                             sub_name = last
@@ -1908,7 +1908,7 @@ class ImageClassifierApp:
             else:
                 last = sorted(subs)[-1]
                 last_folder = os.path.join(base_folder, last)
-                media_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}
+                media_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
                 try:
                     cnt = sum(1 for f in os.listdir(last_folder) if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in media_exts)
                 except Exception:
@@ -4400,7 +4400,7 @@ class ImageClassifierApp:
             file_id = file['id']
             file_path = file['file_path']
             ext = os.path.splitext(file_path)[1].lower()
-            if ext not in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}:
+            if ext not in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}:
                 messagebox.showinfo("提示", "当前仅支持为视频文件更改预览图")
                 return
             dlg = tk.Toplevel(browser_window)
@@ -4840,6 +4840,79 @@ class ImageClassifierApp:
         tag_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tag_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
+        file_container = ttk.LabelFrame(main_frame, text="文件列表（默认全选）")
+        file_container.pack(fill=tk.BOTH, expand=True, pady=5)
+        file_controls = ttk.Frame(file_container)
+        file_controls.pack(fill=tk.X, padx=5, pady=5)
+        file_vars = {}
+        filtered_files_data = []
+        file_canvas = tk.Canvas(file_container)
+        file_scrollbar = ttk.Scrollbar(file_container, orient=tk.VERTICAL, command=file_canvas.yview)
+        file_scrollable_frame = ttk.Frame(file_canvas)
+        file_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: file_canvas.configure(scrollregion=file_canvas.bbox("all"))
+        )
+        file_canvas.create_window((0, 0), window=file_scrollable_frame, anchor="nw")
+        file_canvas.configure(yscrollcommand=file_scrollbar.set)
+        def reload_files():
+            nonlocal filtered_files_data
+            selected_model_ids = [model_id for model_id, var in model_vars.items() if var.get() == 1]
+            selected_tag_ids = [tag_id for tag_id, var in tag_vars.items() if var.get() == 1]
+            all_files = self.db.get_all_files_with_relations()
+            filtered = []
+            for info in all_files:
+                f = info['file']
+                ms = info['models']
+                ts = info['tags']
+                mids = {m['id'] for m in ms}
+                tids = {t['id'] for t in ts}
+                mm = True
+                tm = True
+                if selected_model_ids:
+                    mm = any(m in mids for m in selected_model_ids)
+                if selected_tag_ids:
+                    tm = any(t in tids for t in selected_tag_ids)
+                if mm and tm:
+                    filtered.append(info)
+            filtered_files_data = filtered
+            for child in file_scrollable_frame.winfo_children():
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+            file_vars.clear()
+            for info in filtered_files_data:
+                f = info['file']
+                name = f.get('original_file_name') or f.get('file_name') or os.path.basename(f['file_path'])
+                var = tk.IntVar(value=1)
+                file_vars[f['id']] = var
+                ttk.Checkbutton(file_scrollable_frame, text=name, variable=var).pack(anchor=tk.W, padx=5, pady=2)
+        def select_all_files():
+            for var in file_vars.values():
+                var.set(1)
+        def select_none_files():
+            for var in file_vars.values():
+                var.set(0)
+        ttk.Button(file_controls, text="刷新文件列表", command=reload_files).pack(side=tk.LEFT, padx=5)
+        ttk.Button(file_controls, text="全选", command=select_all_files).pack(side=tk.LEFT, padx=5)
+        ttk.Button(file_controls, text="全不选", command=select_none_files).pack(side=tk.LEFT, padx=5)
+        def on_mousewheel_file(event):
+            if file_canvas.winfo_containing(event.x_root, event.y_root):
+                file_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        file_canvas.bind("<MouseWheel>", on_mousewheel_file)
+        file_scrollable_frame.bind("<MouseWheel>", on_mousewheel_file)
+        file_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        file_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        options_frame = ttk.Frame(main_frame)
+        options_frame.pack(fill=tk.X, pady=5)
+        compress_var = tk.StringVar(value="stored")
+        ttk.Radiobutton(options_frame, text="最快（不压缩）", variable=compress_var, value="stored").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(options_frame, text="标准（压缩）", variable=compress_var, value="deflated").pack(side=tk.LEFT, padx=5)
+        deduplicate_var = tk.IntVar(value=1)
+        ttk.Checkbutton(options_frame, text="避免重复写入", variable=deduplicate_var).pack(side=tk.LEFT, padx=15)
+        ttk.Label(file_scrollable_frame, text="请选择模特/标签后点击“刷新文件列表”加载").pack(anchor=tk.W, padx=5, pady=6)
+        
         # 按钮区域
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=10)
@@ -4849,10 +4922,10 @@ class ImageClassifierApp:
             # 获取选中的模特和标签（可以同时选择）
             selected_model_ids = [model_id for model_id, var in model_vars.items() if var.get() == 1]
             selected_tag_ids = [tag_id for tag_id, var in tag_vars.items() if var.get() == 1]
+            selected_file_ids = [fid for fid, var in file_vars.items() if var.get() == 1]
             
-            # 至少需要选择一个模特或标签
-            if not selected_model_ids and not selected_tag_ids:
-                messagebox.showwarning("警告", "请至少选择一个模特或标签")
+            if not selected_model_ids and not selected_tag_ids and not selected_file_ids:
+                messagebox.showwarning("警告", "请至少选择条件或在文件列表选择文件")
                 return
             
             # 选择保存位置
@@ -4869,7 +4942,14 @@ class ImageClassifierApp:
             
             # 执行导出
             try:
-                self.export_files(selected_model_ids, selected_tag_ids, save_path)
+                self.export_files(
+                    selected_model_ids,
+                    selected_tag_ids,
+                    save_path,
+                    file_ids=selected_file_ids if selected_file_ids else None,
+                    compression=compress_var.get(),
+                    deduplicate=bool(deduplicate_var.get())
+                )
                 messagebox.showinfo("成功", f"导出完成！\n文件已保存到：\n{save_path}")
                 on_close()
             except Exception as e:
@@ -4878,54 +4958,85 @@ class ImageClassifierApp:
         ttk.Button(button_frame, text="导出", command=do_export).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="取消", command=on_close).pack(side=tk.LEFT, padx=5)
     
-    def export_files(self, model_ids, tag_ids, zip_path):
-        """导出文件到zip
-        
-        Args:
-            model_ids: 选中的模特ID列表
-            tag_ids: 选中的标签ID列表
-            zip_path: zip文件保存路径
-        """
+    def export_files(self, model_ids, tag_ids, zip_path, file_ids=None, compression="stored", deduplicate=True):
         all_files = self.db.get_all_files_with_relations()
         filtered_files = []
-        for file_info in all_files:
-            file = file_info['file']
-            file_models = file_info['models']
-            file_tags = file_info['tags']
-            file_model_ids = {m['id'] for m in file_models}
-            file_tag_ids = {t['id'] for t in file_tags}
-            model_match = True
-            tag_match = True
-            if model_ids:
-                model_match = any(model_id in file_model_ids for model_id in model_ids)
-            if tag_ids:
-                tag_match = any(tag_id in file_tag_ids for tag_id in tag_ids)
-            if model_match and tag_match:
-                filtered_files.append(file_info)
+        if file_ids:
+            ids = set(file_ids)
+            for info in all_files:
+                f = info['file']
+                if f.get('id') in ids:
+                    filtered_files.append(info)
+        else:
+            for file_info in all_files:
+                file = file_info['file']
+                file_models = file_info['models']
+                file_tags = file_info['tags']
+                file_model_ids = {m['id'] for m in file_models}
+                file_tag_ids = {t['id'] for t in file_tags}
+                model_match = True
+                tag_match = True
+                if model_ids:
+                    model_match = any(model_id in file_model_ids for model_id in model_ids)
+                if tag_ids:
+                    tag_match = any(tag_id in file_tag_ids for tag_id in tag_ids)
+                if model_match and tag_match:
+                    filtered_files.append(file_info)
         if not filtered_files:
             raise Exception("没有找到符合条件的文件")
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        if compression == "deflated":
+            zipf_ctx = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1)
+        else:
+            zipf_ctx = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED)
+        with zipf_ctx as zipf:
+            names = set()
             for file_info in filtered_files:
                 file = file_info['file']
                 file_models = file_info['models']
                 file_tags = file_info['tags']
                 original_file_name = file.get('original_file_name') or file.get('file_name') or os.path.basename(file['file_path'])
                 if model_ids and tag_ids:
-                    for model in file_models:
-                        if model['id'] in model_ids:
-                            model_name = model['name']
-                            for tag in file_tags:
-                                if tag['id'] in tag_ids:
-                                    tag_name = tag['name']
-                                    base, ext = os.path.splitext(original_file_name)
-                                    arc_dir = os.path.join(model_name, tag_name)
-                                    arcname = os.path.join(arc_dir, original_file_name)
-                                    counter = 1
-                                    while arcname in zipf.namelist():
-                                        arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
-                                        counter += 1
-                                    if os.path.exists(file['file_path']):
-                                        zipf.write(file['file_path'], arcname)
+                    if deduplicate:
+                        m = None
+                        t = None
+                        for mm in file_models:
+                            if mm['id'] in set(model_ids):
+                                m = mm
+                                break
+                        for tt in file_tags:
+                            if tt['id'] in set(tag_ids):
+                                t = tt
+                                break
+                        if m and t:
+                            model_name = m['name']
+                            tag_name = t['name']
+                            base, ext = os.path.splitext(original_file_name)
+                            arc_dir = os.path.join(model_name, tag_name)
+                            arcname = os.path.join(arc_dir, original_file_name)
+                            counter = 1
+                            while arcname in names:
+                                arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
+                                counter += 1
+                            if os.path.exists(file['file_path']):
+                                zipf.write(file['file_path'], arcname)
+                                names.add(arcname)
+                    else:
+                        for model in file_models:
+                            if model['id'] in model_ids:
+                                model_name = model['name']
+                                for tag in file_tags:
+                                    if tag['id'] in tag_ids:
+                                        tag_name = tag['name']
+                                        base, ext = os.path.splitext(original_file_name)
+                                        arc_dir = os.path.join(model_name, tag_name)
+                                        arcname = os.path.join(arc_dir, original_file_name)
+                                        counter = 1
+                                        while arcname in names:
+                                            arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
+                                            counter += 1
+                                        if os.path.exists(file['file_path']):
+                                            zipf.write(file['file_path'], arcname)
+                                            names.add(arcname)
                 elif model_ids:
                     written = False
                     for model in file_models:
@@ -4935,11 +5046,12 @@ class ImageClassifierApp:
                             arc_dir = model_name
                             arcname = os.path.join(arc_dir, original_file_name)
                             counter = 1
-                            while arcname in zipf.namelist():
+                            while arcname in names:
                                 arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
                                 counter += 1
                             if os.path.exists(file['file_path']):
                                 zipf.write(file['file_path'], arcname)
+                                names.add(arcname)
                                 written = True
                 elif tag_ids:
                     written = False
@@ -4950,12 +5062,23 @@ class ImageClassifierApp:
                             arc_dir = tag_name
                             arcname = os.path.join(arc_dir, original_file_name)
                             counter = 1
-                            while arcname in zipf.namelist():
+                            while arcname in names:
                                 arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
                                 counter += 1
                             if os.path.exists(file['file_path']):
                                 zipf.write(file['file_path'], arcname)
+                                names.add(arcname)
                                 written = True
+                else:
+                    base, ext = os.path.splitext(original_file_name)
+                    arcname = original_file_name
+                    counter = 1
+                    while arcname in names:
+                        arcname = f"{base}_{counter}{ext}"
+                        counter += 1
+                    if os.path.exists(file['file_path']):
+                        zipf.write(file['file_path'], arcname)
+                        names.add(arcname)
 
 
 def main():

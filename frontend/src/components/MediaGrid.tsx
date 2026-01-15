@@ -127,6 +127,39 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
       if (fetchedKeysRef.current.has(key)) return
       fetchedKeysRef.current.add(key)
       setLoading(true)
+      const applyPerModelLimit = (arr: MediaItem[], limitPerModel = 2, targetCount = 30): MediaItem[] => {
+        const counts = new Map<string, number>()
+        const chosen: MediaItem[] = []
+        const skipped: MediaItem[] = []
+        const uniq = (ids: string[]) => Array.from(new Set(ids))
+        for (let i = 0; i < arr.length; i++) {
+          const it = arr[i]
+          const ids = uniq(it.models.map(m => m.id))
+          if (ids.length === 0) {
+            chosen.push(it)
+          } else {
+            let ok = true
+            for (const id of ids) {
+              const c = counts.get(id) || 0
+              if (c >= limitPerModel) { ok = false; break }
+            }
+            if (ok) {
+              chosen.push(it)
+              for (const id of ids) counts.set(id, (counts.get(id) || 0) + 1)
+            } else {
+              skipped.push(it)
+            }
+          }
+          if (chosen.length >= targetCount) break
+        }
+        if (chosen.length < targetCount) {
+          for (const it of skipped) {
+            chosen.push(it)
+            if (chosen.length >= targetCount) break
+          }
+        }
+        return chosen
+      }
       const noFilters = modelIds.length === 0 && tagIds.length === 0
       if (noFilters) {
         const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, page, page_size: 30, strict, order, seed })
@@ -134,7 +167,8 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
         setItems(prev => {
           const seen = new Set(prev.map(i => i.id))
           const merged = [...prev]
-          for (const it of res.items) {
+          const diversified = applyPerModelLimit(res.items, 2, 30)
+          for (const it of diversified) {
             if (!seen.has(it.id)) {
               seen.add(it.id)
               merged.push(it)
@@ -152,7 +186,8 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
       setItems(prev => {
         const seen = new Set(prev.map(i => i.id))
         const merged = [...prev]
-        for (const it of res.items) {
+        const diversified = applyPerModelLimit(res.items, 2, 30)
+        for (const it of diversified) {
           if (!seen.has(it.id)) {
             seen.add(it.id)
             merged.push(it)
@@ -215,7 +250,41 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
         {items.length > 0 && columns.map((col, ci) => (
           <div className="col" key={`col-${ci}`}>
             {col.map(({ item, idx }) => (
-              <MediaCard key={item.id} item={item} onOpen={() => setSelectedIndex(idx)} onTagClick={onTagClick} onModelClick={onModelClick} />
+              <MediaCard
+                key={item.id}
+                item={item}
+                onOpen={() => setSelectedIndex(idx)}
+                onOpenSystem={async () => {
+                  const s = item.file_path || ''
+                  if (!s) return
+                  try {
+                    const u = new URL(s, window.location.origin)
+                    if (u.pathname.startsWith('/api/file')) {
+                      const b64 = u.searchParams.get('path')
+                      if (b64) {
+                        const tryPost = async (endpoint: string): Promise<boolean> => {
+                          const ac = new AbortController()
+                          const timer = setTimeout(() => ac.abort(), 1200)
+                          try {
+                            const r = await fetch(endpoint, { method: 'POST', signal: ac.signal })
+                            return r.ok
+                          } catch {
+                            return false
+                          } finally {
+                            clearTimeout(timer)
+                          }
+                        }
+                        const helperOk = await tryPost(`http://127.0.0.1:8001/open?path=${encodeURIComponent(b64)}`)
+                        if (helperOk) return
+                        const apiOk = await tryPost(`/api/open?path=${encodeURIComponent(b64)}`)
+                        if (apiOk) return
+                      }
+                    }
+                  } catch {}
+                }}
+                onTagClick={onTagClick}
+                onModelClick={onModelClick}
+              />
             ))}
           </div>
         ))}
@@ -256,8 +325,9 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
             const mb = kb / 1024
             const gb = mb / 1024
             if (gb >= 1) return `${gb.toFixed(2)}G`
-            if (mb >= 1) return `${Math.round(mb)}M`
-            return `${Math.max(1, Math.ceil(kb))}k`
+            if (mb >= 1) return `${mb.toFixed(2)}M`
+            const k = Number(kb.toFixed(2))
+            return `${(k <= 0 ? 0.01 : k).toFixed(2)}k`
           }
           const fmtDurZh = (ms?: number | null): string | null => {
             if (!ms || ms <= 0) return null
@@ -301,20 +371,7 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
           if (selectedIndex === null) return null
           const it = items[selectedIndex]
           if (!it) return null
-          const onOpenInSystem = async () => {
-            try {
-              const u = new URL(it.file_path || '', window.location.origin)
-              if (u.pathname.startsWith('/api/file')) {
-                const b64 = u.searchParams.get('path')
-                if (b64) {
-                  await fetch(`/api/open?path=${encodeURIComponent(b64)}`, { method: 'POST' })
-                  return
-                }
-              }
-            } catch {}
-            const url = it.file_path || ''
-            if (url) window.open(url, '_blank')
-          }
+          const onOpenInSystem = () => { (window as any).__openInSystem(it.file_path) }
           const displayTitle = (() => {
             const t = it.title || ''
             const m = t.match(/^(.*?)(\.(jpg|jpeg|png|gif|webp|bmp|tiff|svg|mp4|avi|mov|mkv|webm|mpeg|mpg|m4v))$/i)
