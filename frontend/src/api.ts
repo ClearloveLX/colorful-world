@@ -54,26 +54,76 @@ export async function fetchTags(): Promise<Tag[]> {
 export type MediaQuery = {
   model_ids?: string[]
   tag_ids?: string[]
+  exclude_tag_ids?: string[]
   page?: number
   page_size?: number
   strict?: boolean
-  order?: 'recent' | 'random' | 'duration'
+  order?: 'recent' | 'recent_asc' | 'random' | 'duration' | 'duration_asc' | 'heat' | 'heat_asc'
   seed?: number
+  name?: string
 }
 
 export async function fetchMedia(params: MediaQuery): Promise<{ items: MediaItem[]; hasMore: boolean }> {
   const s = q({
     model_ids: params.model_ids?.join(',') || undefined,
     tag_ids: params.tag_ids?.join(',') || undefined,
+    exclude_tag_ids: params.exclude_tag_ids?.join(',') || undefined,
     page: params.page ?? 1,
     page_size: params.page_size ?? 30,
     strict: params.strict ?? true,
     order: params.order,
-    seed: params.seed
+    seed: params.seed,
+    name: (params.name ?? '').trim() || undefined
   })
   try {
     return await getRetry<{ items: MediaItem[]; hasMore: boolean }>(`/media?${s}`)
   } catch {
     return { items: [], hasMore: false }
   }
+}
+
+export async function likeMedia(fileId: string): Promise<{ ok: boolean; heat_value: number }> {
+  const base = API_BASE
+  const path = `/media/${encodeURIComponent(fileId)}/like`
+  const r = await fetch(`${base}${path}`, { method: 'POST' })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+export async function dislikeMedia(fileId: string): Promise<{ ok: boolean; heat_value: number }> {
+  const base = API_BASE
+  const path = `/media/${encodeURIComponent(fileId)}/dislike`
+  const r = await fetch(`${base}${path}`, { method: 'POST' })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+export async function validatePassword(code: string): Promise<{ ok: boolean }> {
+  const base = API_BASE
+  const s = q({ code })
+  return await getRetry<{ ok: boolean }>(`/password/validate?${s}`)
+}
+
+export async function fetchCurrentPassword(): Promise<{ code: string }> {
+  return await getRetry<{ code: string }>(`/password/current`)
+}
+
+export async function bulkAddTags(fileIds: string[], tagIds: string[]): Promise<{ ok: boolean; updated: number; skipped: number; errors: number }> {
+  const r = await fetch(`${API_BASE}/files/bulk/add_tags`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ file_ids: fileIds, tag_ids: tagIds })
+  })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+export async function bulkRemoveTags(fileIds: string[], tagIds: string[]): Promise<{ ok: boolean; updated: number; skipped: number; errors: number }> {
+  const r = await fetch(`${API_BASE}/files/bulk/remove_tags`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ file_ids: fileIds, tag_ids: tagIds })
+  })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
 }

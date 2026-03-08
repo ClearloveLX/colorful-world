@@ -25,6 +25,7 @@ export type MediaItem = {
   video_width?: number | null
   video_height?: number | null
   duration_ms?: number | null
+  heat_value?: number | null
   models: Model[]
   tags: Tag[]
   created_at?: string

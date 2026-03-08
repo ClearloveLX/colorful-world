@@ -1,21 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchMedia } from '../api'
+import { fetchMedia, bulkAddTags, bulkRemoveTags, fetchTags } from '../api'
 import type { MediaItem } from '../types'
 import MediaCard from './MediaCard'
 import Lightbox from './Lightbox'
 import VideoPlayer from './VideoPlayer'
+import TagPicker from './TagPicker'
+import BulkBar from './BulkBar'
 
 type Props = {
   modelIds: string[]
   tagIds: string[]
+  excludeTagIds: string[]
   strict: boolean
-  order: 'random' | 'duration' | 'recent'
+  order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'
   seed: number
+  nameSearch?: string
   onTagClick?: (id: string) => void
   onModelClick?: (id: string) => void
 }
 
-export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTagClick, onModelClick }: Props) {
+export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, order, seed, nameSearch = '', onTagClick, onModelClick }: Props) {
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
@@ -32,6 +36,55 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
   const [colWidth, setColWidth] = useState<number>(300)
   const filterKeyRef = useRef<string>('')
   const prefetchedRef = useRef<Set<string>>(new Set())
+  const [selectMode, setSelectMode] = useState<boolean>(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [pickerOpen, setPickerOpen] = useState<{ type:'add'|'remove'|null }>({ type: null })
+  const [tagMeta, setTagMeta] = useState<Map<string, { name: string; category_name?: string | null }>>(new Map())
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null)
+  const dragSelectingRef = useRef<boolean>(false)
+  const blockClickRef = useRef<boolean>(false)
+  const blockTimerRef = useRef<number | null>(null)
+  const [dragSelecting, setDragSelecting] = useState<boolean>(false)
+  const [selectRect, setSelectRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const rows = await fetchTags()
+        const m = new Map<string, { name: string; category_name?: string | null }>()
+        rows.forEach(t => m.set(t.id, { name: t.name, category_name: t.category_name ?? null }))
+        setTagMeta(m)
+      } catch {}
+    })()
+  }, [])
+  useEffect(() => {
+    const applyFromUrl = () => {
+      try {
+        const params = new URLSearchParams(window.location.search)
+        const m = (params.get('mode') || '').toLowerCase()
+        setSelectMode(m === 'edit')
+      } catch {}
+    }
+    applyFromUrl()
+    const onPop = () => applyFromUrl()
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useEffect(() => {
+    return () => {
+      if (blockTimerRef.current) {
+        window.clearTimeout(blockTimerRef.current)
+        blockTimerRef.current = null
+      }
+    }
+  }, [])
+  useEffect(() => {
+    if (selectMode) return
+    dragStartRef.current = null
+    dragSelectingRef.current = false
+    blockClickRef.current = false
+    setDragSelecting(false)
+    setSelectRect(null)
+  }, [selectMode])
 
   useEffect(() => { setVMeta(null) }, [selectedIndex])
   useEffect(() => {
@@ -67,6 +120,79 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
       })().catch(() => {})
     } catch {}
   }, [selectedIndex, items])
+
+  const onMasonryMouseDown = (e: React.MouseEvent) => {
+    if (!selectMode || e.button !== 0) return
+    const DRAG_THRESHOLD = 8
+    const MIN_RECT = 8
+    const start = { x: e.clientX, y: e.clientY }
+    dragStartRef.current = start
+    dragSelectingRef.current = false
+    setDragSelecting(false)
+    setSelectRect(null)
+    const onMove = (ev: MouseEvent) => {
+      const s = dragStartRef.current
+      if (!s) return
+      const dx = ev.clientX - s.x
+      const dy = ev.clientY - s.y
+      if (!dragSelectingRef.current && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+        dragSelectingRef.current = true
+        setDragSelecting(true)
+      }
+      if (!dragSelectingRef.current) return
+      const left = Math.min(s.x, ev.clientX)
+      const top = Math.min(s.y, ev.clientY)
+      const width = Math.abs(dx)
+      const height = Math.abs(dy)
+      setSelectRect({ left, top, width, height })
+    }
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      const s = dragStartRef.current
+      if (s && dragSelectingRef.current) {
+        const left = Math.min(s.x, ev.clientX)
+        const right = Math.max(s.x, ev.clientX)
+        const top = Math.min(s.y, ev.clientY)
+        const bottom = Math.max(s.y, ev.clientY)
+        const rectW = right - left
+        const rectH = bottom - top
+        if (rectW >= MIN_RECT && rectH >= MIN_RECT) {
+          const grid = gridRef.current
+          if (grid) {
+            const nodes = grid.querySelectorAll<HTMLElement>('[data-media-id]')
+            const picked: string[] = []
+            nodes.forEach(el => {
+              const r = el.getBoundingClientRect()
+              const hit = !(r.right < left || r.left > right || r.bottom < top || r.top > bottom)
+              if (hit) {
+                const id = el.dataset.mediaId
+                if (id) picked.push(id)
+              }
+            })
+            if (picked.length > 0) {
+              setSelectedIds(prev => {
+                const next = new Set(prev)
+                picked.forEach(id => next.add(id))
+                return next
+              })
+            }
+          }
+          if (blockTimerRef.current) {
+            window.clearTimeout(blockTimerRef.current)
+          }
+          blockClickRef.current = true
+          blockTimerRef.current = window.setTimeout(() => { blockClickRef.current = false }, 80)
+        }
+      }
+      dragStartRef.current = null
+      dragSelectingRef.current = false
+      setDragSelecting(false)
+      setSelectRect(null)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     const el = gridRef.current
@@ -115,15 +241,17 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
     fetchedKeysRef.current.clear()
     setReloadHint(true)
     initialLoadedRef.current = false
-    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${strict}|${order}|${seed}`
+    const sName = nameSearch.trim().toLowerCase()
+    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${order}|${seed}|${sName}`
     const t = setTimeout(() => setReloadHint(false), 1200)
     return () => clearTimeout(t)
-  }, [modelIds.join(','), tagIds.join(','), strict, order])
+  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, order, nameSearch, seed])
 
   useEffect(() => {
     const run = async () => {
       if (!hasMore || loading) return
-      const key = `${page}|${modelIds.join(',')}|${tagIds.join(',')}|${strict}|${order}`
+      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${order}|${seed}|${nameSearch.trim().toLowerCase()}`
+      const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
       fetchedKeysRef.current.add(key)
       setLoading(true)
@@ -160,29 +288,8 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
         }
         return chosen
       }
-      const noFilters = modelIds.length === 0 && tagIds.length === 0
-      if (noFilters) {
-        const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, page, page_size: 30, strict, order, seed })
-        if (filterKeyRef.current !== `${modelIds.join(',')}|${tagIds.join(',')}|${strict}|${order}|${seed}`) { setLoading(false); return }
-        setItems(prev => {
-          const seen = new Set(prev.map(i => i.id))
-          const merged = [...prev]
-          const diversified = applyPerModelLimit(res.items, 2, 30)
-          for (const it of diversified) {
-            if (!seen.has(it.id)) {
-              seen.add(it.id)
-              merged.push(it)
-            }
-          }
-          return merged
-        })
-        setHasMore(res.hasMore)
-        setLoading(false)
-        if (page === 1) initialLoadedRef.current = true
-        return
-      }
-      const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, page, page_size: 30, strict, order, seed })
-      if (filterKeyRef.current !== `${modelIds.join(',')}|${tagIds.join(',')}|${strict}|${order}|${seed}`) { setLoading(false); return }
+      const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, exclude_tag_ids: excludeTagIds, page, page_size: 30, strict, order, seed, name: nameSearch })
+      if (filterKeyRef.current !== filterSig) { setLoading(false); return }
       setItems(prev => {
         const seen = new Set(prev.map(i => i.id))
         const merged = [...prev]
@@ -200,7 +307,7 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
       if (page === 1) initialLoadedRef.current = true
     }
     run()
-  }, [page, modelIds.join(','), tagIds.join(','), strict, order, loading, hasMore])
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, order, seed, nameSearch, loading, hasMore])
 
   useEffect(() => {
     const el = sentinel.current
@@ -222,7 +329,7 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
     const ids = [selectedIndex - 1, selectedIndex + 1]
     const isVideo = (ft?: string | null) => {
       const s = (ft || '').toLowerCase()
-      return ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v'].includes(s)
+      return ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(s)
     }
     ids.forEach(idx => {
       if (idx < 0 || idx >= items.length) return
@@ -243,10 +350,46 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
 
   return (
     <div className="container">
+      {selectMode && (
+        <BulkBar
+          selectedCount={selectedIds.size}
+          onAddTags={() => setPickerOpen({ type:'add' })}
+          onRemoveTags={() => setPickerOpen({ type:'remove' })}
+          onSelectAll={() => {
+            try {
+              const all = new Set(items.map(i => i.id))
+              setSelectedIds(all)
+            } catch {
+              setSelectedIds(new Set(items.map(i => i.id)))
+            }
+          }}
+          onClear={() => setSelectedIds(new Set())}
+          onExit={() => {
+            setSelectMode(false)
+            setSelectedIds(new Set())
+            try {
+              const url = new URL(window.location.href)
+              url.searchParams.delete('mode')
+              window.history.replaceState({}, '', url.toString())
+            } catch {}
+          }}
+        />
+      )}
       {reloadHint && (
         <div className="toast"><div className="bubble">{strict ? '强关联已开启，重新加载…' : '强关联已关闭，重新加载…'}</div></div>
       )}
-      <div className="masonry" ref={gridRef} style={{ ['--col-w' as any]: `${colWidth}px` }}>
+      <div
+        className={`masonry${dragSelecting ? ' selecting' : ''}`}
+        ref={gridRef}
+        style={{ ['--col-w' as any]: `${colWidth}px` }}
+        onMouseDown={onMasonryMouseDown}
+        onClickCapture={(e) => {
+          if (blockClickRef.current) {
+            e.preventDefault()
+            e.stopPropagation()
+          }
+        }}
+      >
         {items.length > 0 && columns.map((col, ci) => (
           <div className="col" key={`col-${ci}`}>
             {col.map(({ item, idx }) => (
@@ -284,6 +427,15 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
                 }}
                 onTagClick={onTagClick}
                 onModelClick={onModelClick}
+                selectable={selectMode}
+                selected={selectedIds.has(item.id)}
+                onSelectToggle={() => {
+                  setSelectedIds(prev => {
+                    const s = new Set(prev)
+                    if (s.has(item.id)) s.delete(item.id); else s.add(item.id)
+                    return s
+                  })
+                }}
               />
             ))}
           </div>
@@ -298,6 +450,12 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
           ))
         )}
       </div>
+      {selectRect && (
+        <div
+          className="selection-rect"
+          style={{ left: selectRect.left, top: selectRect.top, width: selectRect.width, height: selectRect.height }}
+        />
+      )}
       {!loading && items.length === 0 && (<div className="muted" style={{ textAlign:'center', padding:24 }}>暂无内容，试试关闭强关联或减少筛选条件</div>)}
       <div ref={sentinel} />
       {loading && items.length > 0 && (
@@ -422,6 +580,40 @@ export default function MediaGrid({ modelIds, tagIds, strict, order, seed, onTag
           })()
         )}
       </Lightbox>
+      <TagPicker
+        open={pickerOpen.type !== null}
+        title={pickerOpen.type === 'add' ? '批量添加标签' : '批量移除标签'}
+        onClose={() => setPickerOpen({ type:null })}
+        onApply={async (tagIdsSel: string[]) => {
+          const ids = Array.from(selectedIds)
+          if (ids.length === 0 || tagIdsSel.length === 0) { setPickerOpen({ type:null }); return }
+          try {
+            if (pickerOpen.type === 'add') {
+              await bulkAddTags(ids, tagIdsSel)
+              setItems(prev => prev.map(it => {
+                if (!selectedIds.has(it.id)) return it
+                const exist = new Set(it.tags.map(t => t.id))
+                const newTags = [...it.tags]
+                tagIdsSel.forEach(tid => {
+                  if (!exist.has(tid)) {
+                    const meta = tagMeta.get(tid)
+                    newTags.push({ id: tid, name: meta?.name || tid, category_name: meta?.category_name })
+                  }
+                })
+                return { ...it, tags: newTags }
+              }))
+            } else {
+              await bulkRemoveTags(ids, tagIdsSel)
+              setItems(prev => prev.map(it => {
+                if (!selectedIds.has(it.id)) return it
+                const tset = new Set(tagIdsSel)
+                return { ...it, tags: it.tags.filter(t => !tset.has(t.id)) }
+              }))
+            }
+          } catch {}
+          setPickerOpen({ type:null })
+        }}
+      />
     </div>
   )
 }

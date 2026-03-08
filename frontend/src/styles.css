@@ -8,17 +8,24 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
 .app-layout{display:grid;grid-template-columns:280px 1fr;min-height:100vh}
 .sidebar{position:sticky;top:0;height:100vh;padding:12px;border-right:1px solid var(--border);background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(255,255,255,.75));backdrop-filter:blur(6px);overflow:auto}
 .sidebar::-webkit-scrollbar{width:8px}.sidebar::-webkit-scrollbar-thumb{background:#b9c6db;border-radius:8px}
-.section-title{font-weight:600;margin:8px 0}
+.section-title{font-weight:600;margin:8px 0;color:var(--muted);padding-left:12px;position:relative}
+.section-title:before{content:"";position:absolute;left:0;top:50%;width:6px;height:6px;border-radius:50%;background:#93c5fd;transform:translateY(-50%)}
 .search-input{width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--text)}
-.chips{display:grid;gap:6px}
-.chip{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:16px;border:1px solid #e3ebf5;background:#f8fbff;color:var(--text);cursor:pointer;transition:.2s}
+.chips{display:flex;flex-wrap:wrap;gap:4px;padding-left:14px;margin-left:6px;border-left:1px dashed #dbeafe}
+.chip{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;border-radius:16px;border:1px solid #e3ebf5;background:#f8fbff;color:var(--text);cursor:pointer;transition:.2s}
 .chip:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(15,23,42,.12)}
 .chip.selected{border-color:var(--primary);background:#e8f0ff}
-.tag-chip{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:12px;border:1px solid #e3ebf5;background:#f7fbff;color:var(--text);cursor:pointer;transition:.2s}
+.tag-chip{display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;border-radius:12px;border:1px solid #e3ebf5;background:#f7fbff;color:var(--text);cursor:pointer;transition:.2s}
 .tag-chip.selected{border-color:var(--primary);background:#eaf2ff}
-.group-header{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px;user-select:none;cursor:pointer;padding:8px 10px;border-radius:10px;border:1px solid var(--border);background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(255,255,255,.75));transition:.16s}
+.tag-chip.exclude{border-color:#ef4444;background:#fff1f2;color:#b91c1c}
+.group-header{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px;user-select:none;cursor:pointer;padding:8px 10px 8px 14px;border-radius:10px;border:1px solid var(--border);border-left:3px solid #dbeafe;background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(255,255,255,.75));transition:.16s;margin-left:6px}
 .group-header:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(15,23,42,.12);background:linear-gradient(180deg,rgba(255,255,255,.95),rgba(255,255,255,.82))}
 .group-name{font-weight:700;letter-spacing:.2px;background:linear-gradient(90deg,#0f172a,#334155 60%,#0ea5e9);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 1px 0 rgba(255,255,255,.6))}
+.section-header{display:flex;align-items:center;justify-content:space-between;color:var(--text);font-size:14px;font-weight:700;user-select:none;cursor:pointer;padding:10px 12px;border-radius:12px;border:1px solid #cfe2ff;background:linear-gradient(180deg,#ffffff,#f3f8ff);transition:.16s;position:relative}
+.section-header::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#2563eb;border-top-left-radius:12px;border-bottom-left-radius:12px}
+.section-header:hover{transform:translateY(-1px);box-shadow:0 10px 20px rgba(59,130,246,.15)}
+.section-name{font-weight:800;letter-spacing:.3px;color:#0f172a}
+.section-header .caret{border-top-color:#2563eb}
 .caret{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid #94a3b8;transition:.16s}
 .caret.open{transform:rotate(180deg)}
 .badge-count{display:inline-block;min-width:20px;padding:2px 6px;border-radius:10px;background:#eef6ff;border:1px solid #dbeafe;color:#2563eb;font-size:12px;text-align:center}
@@ -27,6 +34,7 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
 .toast{position:sticky;top:16px;display:grid;place-items:center;z-index:20}
 .toast .bubble{background:#eff6ff;color:#0f172a;padding:6px 10px;border-radius:16px;opacity:.95;font-size:12px;border:1px solid var(--border);animation:fadeIn .2s ease}
 .masonry{display:flex;gap:16px;align-items:flex-start}
+.masonry.selecting{user-select:none;cursor:crosshair}
 .masonry>.col{display:flex;flex-direction:column;gap:16px;width:var(--col-w,300px)}
 @media(max-width:640px){.masonry{gap:12px}}
 .card{break-inside:avoid;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#fff;box-shadow:0 8px 20px rgba(15,23,42,.08);transform:translateZ(0);animation:fadeUp .25s ease}
@@ -93,6 +101,22 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
 .pill.clickable:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(0,0,0,.3);background:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,.16))}
 .card-tag.model{background:#eef6ff}
 .card-tag.model:hover{background:#e4f0ff}
+.heat-pill{display:inline-flex;align-items:center;gap:6px}
+.heat-icon{display:inline-flex;align-items:center;justify-content:center}
+.heat-count{display:inline-block;min-width:24px;text-align:left}
+.heat-count.bump{animation:countBump .26s ease}
+.heat-icon svg{animation:none}
+.like-btn:not(.disabled) span{transition:transform .12s ease}
+.dislike-btn:not(.disabled) span{transition:transform .12s ease}
+.like-btn:active span{transform:scale(1.08)}
+.dislike-btn:active span{transform:scale(1.08)}
+.like-btn.disabled{opacity:.6;pointer-events:none}
+.like-fly{position:absolute;right:12px;top:-2px;color:#ef4444;font-weight:700;animation:likeFly 620ms ease-out forwards;pointer-events:none}
+@keyframes likeFly{0%{opacity:0;transform:translateY(0) scale(.92)}20%{opacity:1}80%{opacity:1;transform:translateY(-20px) scale(1.08)}100%{opacity:0;transform:translateY(-30px) scale(1.02)}}
+.dislike-btn.disabled{opacity:.6;pointer-events:none}
+.dislike-fly{position:absolute;right:42px;top:-2px;color:#64748b;font-weight:700;animation:dislikeFly 620ms ease-out forwards;pointer-events:none}
+@keyframes dislikeFly{0%{opacity:0;transform:translateY(0) scale(.92)}20%{opacity:1}80%{opacity:1;transform:translateY(-20px) scale(1.08)}100%{opacity:0;transform:translateY(-30px) scale(1.02)}}
+@keyframes countBump{0%{transform:translateY(0);opacity:.85}50%{transform:translateY(-2px);opacity:1}100%{transform:translateY(0);opacity:1}}
 @media(max-width:920px){
   .lightbox-body{flex-direction:column}
   .lightbox-meta.lightbox-right, .lightbox-meta.lightbox-left{width:100%;max-width:90vw}
@@ -106,6 +130,14 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
 .skeleton{break-inside:avoid;margin-bottom:16px;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#fff}
 .skeleton .block{height:200px;background:linear-gradient(90deg,#f5f8ff 0%,#eaf1ff 50%,#f5f8ff 100%);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
 .skeleton .line{height:12px;margin:10px;background:linear-gradient(90deg,#f5f8ff 0%,#eaf1ff 50%,#f5f8ff 100%);background-size:200% 100%;animation:shimmer 1.2s linear infinite;border-radius:6px}
+.bulk-bar{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid var(--border);padding:8px;display:flex;align-items:center;gap:8}
+.card-selected{border-color:#3b82f6;box-shadow:0 0 0 1px #93c5fd inset,0 8px 20px rgba(59,130,246,.08)}
+.selection-rect{position:fixed;z-index:60;border:1px dashed #3b82f6;background:rgba(59,130,246,.12);box-shadow:0 0 0 1px rgba(59,130,246,.25) inset;pointer-events:none}
+.tool-btn{font-size:12px;line-height:1;padding:6px 10px;border-radius:12px;border:1px solid var(--border);background:#eef6ff;color:var(--text);cursor:pointer;transition:.16s}
+.tool-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(15,23,42,.12);background:#e6f0ff}
+.tool-btn.primary{background:linear-gradient(180deg,#3b82f6,#2563eb);color:#fff;border:1px solid #cfe2ff}
+.tool-btn.primary:hover{filter:brightness(1.05)}
+.tool-btn.active{background:linear-gradient(180deg,#3b82f6,#2563eb);color:#fff;border:1px solid #cfe2ff}
 
 /* 侧栏排序按钮（不常用） */
 .sort-btn{font-size:12px;line-height:1;padding:6px 10px;border-radius:12px;border:1px solid var(--border);background:#fff;color:var(--text);cursor:pointer;transition:.16s}
@@ -141,6 +173,7 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
   .video-corner-icon{top:3px;right:3px;width:16px;height:16px}
 }
 .tag-chip:hover{transform:translateY(-1px) scale(1.02);box-shadow:0 8px 20px rgba(0,0,0,.25)}
+.tag-chip.tag-chip-large{padding:8px 14px; min-width:140px}
 /* Effects: random reveal variants */
 .card-cover{perspective:800px}
 .img-reveal.eff-sweep{animation:sweepDiag .45s ease both, kenIn .45s ease both}
@@ -165,3 +198,14 @@ background-size:40px 40px; background-position:0 0,20px 20px; animation:checkerO
 @keyframes wipeLeft{0%{clip-path:inset(0 100% 0 0)}100%{clip-path:inset(0 0 0 0)}}
 @keyframes wipeRight{0%{clip-path:inset(0 0 0 100%)}100%{clip-path:inset(0 0 0 0)}}
 @keyframes checkerOut{0%{opacity:1}100%{opacity:0}}
+.lock-overlay{position:fixed;inset:0;display:grid;place-items:center;background:#fff;z-index:200}
+.lock-card{width:360px;max-width:92vw;border:1px solid var(--border);border-radius:12px;background:#fff;box-shadow:0 12px 28px rgba(15,23,42,.16);padding:16px;display:grid;gap:10px}
+.lock-title{font-weight:700;font-size:16px;color:var(--text)}
+.lock-input{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font-size:14px}
+.lock-btn{padding:10px;border-radius:10px;border:1px solid var(--border);background:#2563eb;color:#fff;cursor:pointer}
+.lock-btn:hover{filter:brightness(1.05)}
+.lock-error{color:#ef4444;font-size:12px}
+.dialog-panel{background:#fff;border-radius:12px;padding:12px;border:1px solid var(--border);box-shadow:0 12px 28px rgba(15,23,42,.16);color:var(--text);max-width:90vw}
+.dialog-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.dialog-title{font-weight:700;font-size:16px;color:var(--text)}
+.dialog-actions{display:flex;gap:8px}

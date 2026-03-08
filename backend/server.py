@@ -8,6 +8,11 @@ import base64
 from fastapi import HTTPException
 import sys
 import subprocess
+import urllib.request
+import urllib.parse
+import ctypes
+from typing import List
+from pydantic import BaseModel
 
 from backend.data.database import Database
 
@@ -67,6 +72,18 @@ def _to_static_url(p: Optional[str]) -> Optional[str]:
         rel = s_slash
     if os.path.isabs(s):
         try:
+            s_norm = os.path.normcase(os.path.normpath(s))
+            marker = os.sep + "data" + os.sep
+            if marker in s_norm:
+                idx = s_norm.index(marker)
+                rel_in_data = s_norm[idx + len(marker):].replace("\\", "/")
+                fs_path = os.path.join(DATA_ROOT, rel_in_data)
+                b64 = base64.urlsafe_b64encode(fs_path.encode('utf-8')).decode('ascii').rstrip('=')
+                return f"/api/file?path={b64}"
+        except Exception:
+            pass
+    if os.path.isabs(s):
+        try:
             b64 = base64.urlsafe_b64encode(s.encode('utf-8')).decode('ascii').rstrip('=')
             return f"/api/file?path={b64}"
         except Exception:
@@ -109,17 +126,20 @@ def get_model_types():
 def get_media(
     model_ids: Optional[str] = Query(default=None),
     tag_ids: Optional[str] = Query(default=None),
+    exclude_tag_ids: Optional[str] = Query(default=None),
     page: int = 1,
     page_size: int = 30,
     strict: bool = True,
     order: Optional[str] = Query(default=None),
     seed: Optional[int] = Query(default=None),
+    name: Optional[str] = Query(default=None),
 ):
     mset = [s for s in (model_ids or '').split(',') if s]
     tset = [s for s in (tag_ids or '').split(',') if s]
+    exset = [s for s in (exclude_tag_ids or '').split(',') if s]
     offset = max((page - 1) * page_size, 0)
     # 数据库级过滤与分页
-    rows = db.query_files_with_filters(model_ids=mset or None, tag_ids=tset or None, strict=strict, offset=offset, limit=page_size, order=(order or 'recent'), seed=seed)
+    rows = db.query_files_with_filters(model_ids=mset or None, tag_ids=tset or None, exclude_tag_ids=exset or None, strict=strict, offset=offset, limit=page_size, order=(order or 'recent'), seed=seed, name=name)
     # 组装关联数据
     slice_items = []
     # 预加载标签元数据用于排序与分组
@@ -140,8 +160,6 @@ def get_media(
         return (cat_order.get(info['category_id']) or 0, info['category_name'] or '', info['tag_order'] or 0, info['name'] or '')
     for f in rows:
         ft = (f.get("file_type") or "").lower()
-        if ft == "ts":
-            continue
         file_id = f['id']
         models = db.get_file_models(file_id)
         file_tags = db.get_file_tags(file_id)
@@ -176,18 +194,27 @@ def get_media(
                     sz = os.path.getsize(p)
             except Exception:
                 sz = None
+        ft = (f.get("file_type") or "").lower()
+        thumb = f.get("thumbnail_path")
+        if (ft in ("mp3", "m4a")) and not thumb:
+            svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#eef6ff"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#2563eb" font-size="72">♫</text></svg>'
+            try:
+                thumb = "data:image/svg+xml," + urllib.parse.quote(svg)
+            except Exception:
+                thumb = None
         result.append({
             "id": f["id"],
             "title": f.get("original_file_name") or f.get("file_name") or f.get("id"),
             "file_path": to_url(f.get("file_path")),
             "file_type": f.get("file_type") or "unknown",
-            "thumbnail_path": to_url(f.get("thumbnail_path")),
+            "thumbnail_path": to_url(thumb if thumb else f.get("thumbnail_path")),
             "file_size": sz,
             "image_width": f.get("image_width"),
             "image_height": f.get("image_height"),
             "video_width": f.get("video_width"),
             "video_height": f.get("video_height"),
             "duration_ms": f.get("duration_ms"),
+            "heat_value": f.get("heat_value"),
             "models": [{"id": m["id"], "name": m["name"], "type": (types.get(m.get("model_type_id")) or m.get("model_type") or None), "preview_image_path": m.get("preview_image_path") or None} for m in info.get("models", [])],
             "tags": [{"id": t.get("id"), "name": t.get("name"), "category_name": t.get("category_name")} for t in info.get("tags", [])],
             "created_at": f.get("created_at"),
@@ -204,21 +231,91 @@ def _guess_content_type(p: str) -> str:
     if ext == ".avi": return "video/x-msvideo"
     if ext == ".mov": return "video/quicktime"
     if ext == ".m4v": return "video/x-m4v"
+    if ext in (".ts", ".m2ts"): return "video/mp2t"
+    if ext == ".wmv": return "video/x-ms-wmv"
     if ext in (".mpeg", ".mpg"): return "video/mpeg"
+    if ext == ".3gp": return "video/3gpp"
+    if ext == ".mp3": return "audio/mpeg"
+    if ext == ".m4a": return "audio/mp4"
     if ext in (".jpg", ".jpeg"): return "image/jpeg"
     if ext == ".png": return "image/png"
     if ext == ".gif": return "image/gif"
     if ext == ".webp": return "image/webp"
     return "application/octet-stream"
 
-@app.get("/api/file")
-def get_file(path: str, request: Request):
+def _decode_b64_path(path: str) -> str:
     try:
         pad = (4 - (len(path) % 4)) % 4
         padded = path + ("=" * pad)
-        p = base64.urlsafe_b64decode(padded).decode('utf-8')
+        return base64.urlsafe_b64decode(padded).decode('utf-8')
     except Exception:
         raise HTTPException(status_code=400, detail="invalid path")
+
+def _open_in_system(p: str, raw_path: str) -> bool:
+    if os.name == "nt":
+        try:
+            r = ctypes.windll.shell32.ShellExecuteW(None, "open", p, None, os.path.dirname(p), 1)
+            if r and r > 32:
+                return True
+        except Exception:
+            pass
+        try:
+            u = "http://127.0.0.1:8001/open?path=" + urllib.parse.quote(raw_path)
+            req = urllib.request.Request(u, method="POST")
+            urllib.request.urlopen(req, timeout=1)
+            return True
+        except Exception:
+            pass
+        try:
+            os.startfile(p)  # type: ignore
+            return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(f'start "" "{p}"', shell=True)
+            return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-Command", f'Start-Process -Verb Open -FilePath "{p}"'])
+            return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(["rundll32.exe", "url.dll,FileProtocolHandler", p])
+            return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(["explorer.exe", p])
+            return True
+        except Exception:
+            return False
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", p])
+        return True
+    subprocess.Popen(["xdg-open", p])
+    return True
+
+def _bulk_apply_tags(file_ids: List[str], tag_ids: List[str], op):
+    updated = 0
+    skipped = 0
+    errors = 0
+    for fid in (file_ids or []):
+        for tid in (tag_ids or []):
+            try:
+                ok = op(fid, tid)
+                if ok:
+                    updated += 1
+                else:
+                    skipped += 1
+            except Exception:
+                errors += 1
+    return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
+
+@app.get("/api/file")
+def get_file(path: str, request: Request):
+    p = _decode_b64_path(path)
     if not os.path.isfile(p):
         raise HTTPException(status_code=404, detail="file not found")
     ct = _guess_content_type(p)
@@ -254,12 +351,7 @@ def get_file(path: str, request: Request):
 
 @app.head("/api/file")
 def head_file(path: str):
-    try:
-        pad = (4 - (len(path) % 4)) % 4
-        padded = path + ("=" * pad)
-        p = base64.urlsafe_b64decode(padded).decode('utf-8')
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid path")
+    p = _decode_b64_path(path)
     if not os.path.isfile(p):
         raise HTTPException(status_code=404, detail="file not found")
     ct = _guess_content_type(p)
@@ -272,26 +364,37 @@ def head_file(path: str):
     }
     return Response(status_code=200, headers=headers, media_type=ct)
 
+@app.post("/api/media/{file_id}/like")
+def like_media(file_id: str):
+    row = db.get_file_by_id(file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        new_heat = db.increment_file_heat(file_id, delta=1)
+        return {"ok": True, "heat_value": new_heat}
+    except Exception:
+        raise HTTPException(status_code=500, detail="like failed")
+
+@app.post("/api/media/{file_id}/dislike")
+def dislike_media(file_id: str):
+    row = db.get_file_by_id(file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        new_heat = db.increment_file_heat(file_id, delta=-1)
+        return {"ok": True, "heat_value": new_heat}
+    except Exception:
+        raise HTTPException(status_code=500, detail="dislike failed")
+
 @app.post("/api/open")
 def open_file(path: str):
-    try:
-        pad = (4 - (len(path) % 4)) % 4
-        padded = path + ("=" * pad)
-        p = base64.urlsafe_b64decode(padded).decode('utf-8')
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid path")
+    p = _decode_b64_path(path)
+    p = os.path.normpath(p.replace("/", os.sep))
     if not os.path.isfile(p):
         raise HTTPException(status_code=404, detail="file not found")
     try:
-        if os.name == "nt":
-            try:
-                os.startfile(p)  # type: ignore
-            except Exception:
-                subprocess.Popen(["cmd", "/c", "start", "", p], shell=True)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", p])
-        else:
-            subprocess.Popen(["xdg-open", p])
+        if not _open_in_system(p, path):
+            raise Exception("open failed")
     except Exception:
         raise HTTPException(status_code=500, detail="open failed")
     return {"ok": True}
@@ -304,13 +407,49 @@ if os.path.isdir(FRONTEND_DIST):
 
     @app.get("/")
     def serve_root():
+        try:
+            rotate = (os.environ.get('CW_PASSWORD_ROTATE', '1').strip() != '0')
+            static_code = os.environ.get('CW_PASSWORD_STATIC')
+            if rotate and not (static_code and static_code.strip()):
+                db.rotate_access_password()
+        except Exception:
+            pass
         index_path = os.path.join(FRONTEND_DIST, "index.html")
         return FileResponse(index_path)
 
+    # SPA 路由回退定义放在 /api 路由之后，避免截获 /api/* 请求
+    
+@app.get("/api/password/validate")
+def password_validate(code: str):
+    try:
+        ok = db.validate_access_password(code)
+        return {"ok": bool(ok)}
+    except Exception:
+        return {"ok": False}
+    
+@app.get("/api/password/current")
+def password_current():
+    try:
+        code = db.get_current_access_password()
+        return {"code": code or ""}
+    except Exception:
+        return {"code": ""}
+
+class BulkTagOp(BaseModel):
+    file_ids: List[str]
+    tag_ids: List[str]
+
+@app.post("/api/files/bulk/add_tags")
+def bulk_add_tags(payload: BulkTagOp):
+    return _bulk_apply_tags(payload.file_ids, payload.tag_ids, db.add_file_tag)
+
+@app.post("/api/files/bulk/remove_tags")
+def bulk_remove_tags(payload: BulkTagOp):
+    return _bulk_apply_tags(payload.file_ids, payload.tag_ids, db.remove_file_tag)
+if os.path.isdir(FRONTEND_DIST):
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str):
         if full_path.startswith("api/"):
-            # 交给上面的 /api 路由处理
             from fastapi import HTTPException
             raise HTTPException(status_code=404)
         index_path = os.path.join(FRONTEND_DIST, "index.html")

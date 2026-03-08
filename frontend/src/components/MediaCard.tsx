@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '../types'
+import { likeMedia, dislikeMedia } from '../api'
 
 type Props = { item: MediaItem; onOpen: () => void; onOpenSystem?: () => void; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
+type ExtraProps = { selectable?: boolean; selected?: boolean; onSelectToggle?: () => void }
 
-export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onModelClick }: Props) {
-  const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v'].includes(item.file_type.toLowerCase())
+export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onModelClick, selectable, selected, onSelectToggle }: Props & ExtraProps) {
+  const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(item.file_type.toLowerCase())
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [tilt, setTilt] = useState<string>('')
@@ -17,6 +19,17 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   const [beam, setBeam] = useState<string>('')
   const [sizeOverride, setSizeOverride] = useState<number | null>(null)
   const clickTimerRef = useRef<number | null>(null)
+  const [heat, setHeat] = useState<number>(Number(item.heat_value ?? 0))
+  const [liking, setLiking] = useState<boolean>(false)
+  const [disliking, setDisliking] = useState<boolean>(false)
+  const lastClickRef = useRef<number>(0)
+  const lastClickDownRef = useRef<number>(0)
+  const [flyKey, setFlyKey] = useState<number | null>(null)
+  const [flyDownKey, setFlyDownKey] = useState<number | null>(null)
+  const [dispHeat, setDispHeat] = useState<number>(Number(item.heat_value ?? 0))
+  const heatAnimRef = useRef<number | null>(null)
+  const [heatBumpKey, setHeatBumpKey] = useState<number | null>(null)
+  const busy = liking || disliking
   const aspect = useMemo(() => {
     const w = item.image_width || 0
     const h = item.image_height || 0
@@ -57,6 +70,12 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   }
   const onLeave = () => { setTilt(''); setBeam('') }
   const onClick = (e: React.MouseEvent) => {
+    if (selectable) {
+      e.preventDefault()
+      e.stopPropagation()
+      onSelectToggle && onSelectToggle()
+      return
+    }
     const el = cardRef.current
     if (!el) { onOpen(); return }
     const r = el.getBoundingClientRect()
@@ -116,9 +135,68 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
       })().catch(() => {})
     } catch {}
   }, [item.id, item.file_path, item.file_size])
+  const onLike = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const now = Date.now()
+    if (busy || (now - lastClickRef.current) < 420) return
+    lastClickRef.current = now
+    setHeat(h => (Number.isFinite(h) ? h + 1 : 1))
+    setFlyKey(now)
+    setLiking(true)
+    try {
+      const res = await likeMedia(item.id)
+      if (typeof res?.heat_value === 'number') setHeat(res.heat_value)
+    } catch {
+      // 保持乐观更新，不回滚
+    } finally {
+      setLiking(false)
+    }
+  }
+  const fmtHeat = (n?: number | null): string => {
+    const v = Number(n || 0)
+    if (!isFinite(v)) return '0'
+    if (v >= 1_000_000) return `${(v/1_000_000).toFixed(2)}M`
+    if (v >= 10_000) return `${(v/1000).toFixed(1)}k`
+    return String(v)
+  }
+  useEffect(() => {
+    const from = dispHeat
+    const to = heat
+    const d = 280
+    if (heatAnimRef.current) {
+      try { cancelAnimationFrame(heatAnimRef.current) } catch {}
+      heatAnimRef.current = null
+    }
+    const start = performance.now()
+    const step = (ts: number) => {
+      const p = Math.min((ts - start) / d, 1)
+      const eased = p < 0 ? 0 : (p * (2 - p))
+      const val = Math.round(from + (to - from) * eased)
+      setDispHeat(val)
+      if (p < 1) {
+        heatAnimRef.current = requestAnimationFrame(step)
+      } else {
+        heatAnimRef.current = null
+      }
+    }
+    setHeatBumpKey(Date.now())
+    heatAnimRef.current = requestAnimationFrame(step)
+    return () => {
+      if (heatAnimRef.current) {
+        try { cancelAnimationFrame(heatAnimRef.current) } catch {}
+        heatAnimRef.current = null
+      }
+    }
+  }, [heat])
   return (
-    <div className="card tilt" ref={cardRef} style={{ transform: tilt }} onMouseMove={onMove} onMouseLeave={onLeave}>
+    <div className={`card tilt${selected ? ' card-selected' : ''}`} ref={cardRef} data-media-id={item.id} style={{ transform: tilt }} onMouseMove={onMove} onMouseLeave={onLeave}>
       <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ cursor:'pointer', background:'#f5f8ff', aspectRatio: aspect }}>
+        {selectable && (
+          <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,.9)', padding:'4px 8px', borderRadius:10, border:'1px solid #dbe4f3' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
+            <input type="checkbox" checked={!!selected} readOnly />
+            <span className="muted">选择</span>
+          </label>
+        )}
         {(!imgLoaded || imgFailed) && <div className="img-placeholder" />}
         <img
           src={imgSrc}
@@ -178,6 +256,56 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
             const text = isVideo ? [size, dur].filter(Boolean).join(' · ') : size
             return text ? (<span className="card-tag">{text}</span>) : null
           })()}
+        </div>
+        <div className="meta" style={{ marginTop: 4, display:'flex', gap:8, alignItems:'center', position:'relative' }}>
+          <span className="card-tag heat-pill" title={`好感度：${heat}`}>
+            <span className="heat-icon" aria-hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="#ef4444" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 21s-6.716-4.09-9.192-6.566C1.332 13.956 1 12.872 1 11.727 1 9.1 3.1 7 5.727 7c1.516 0 2.897.643 3.846 1.669L12 11.136l2.427-2.467C15.376 7.643 16.757 7 18.273 7 20.9 7 23 9.1 23 11.727c0 1.145-.332 2.229-1.808 2.707C18.716 16.91 12 21 12 21z"/>
+              </svg>
+            </span>
+            <span className={`heat-count${heatBumpKey ? ' bump' : ''}`} key={heatBumpKey || undefined}>{fmtHeat(dispHeat)}</span>
+          </span>
+          <button
+            className={`pill pill-dark clickable like-btn${liking ? ' disabled' : ''}`}
+            onClick={onLike}
+            title="好感度+1"
+            aria-label="点赞"
+            disabled={liking}
+          >
+            <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:18, height:18 }}>👍</span>
+          </button>
+          {flyKey && (
+            <span key={flyKey} className="like-fly">+1</span>
+          )}
+          <button
+            className={`pill pill-dark clickable dislike-btn${disliking ? ' disabled' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              const now = Date.now()
+              if (busy || (now - lastClickDownRef.current) < 420) return
+              lastClickDownRef.current = now
+              setHeat(h => (Number.isFinite(h) ? h - 1 : -1))
+              setFlyDownKey(now)
+              setDisliking(true)
+              ;(async () => {
+                try {
+                  const res = await dislikeMedia(item.id)
+                  if (typeof res?.heat_value === 'number') setHeat(res.heat_value)
+                } finally {
+                  setDisliking(false)
+                }
+              })()
+            }}
+            title="好感度-1"
+            aria-label="点踩"
+            disabled={busy}
+          >
+            <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:18, height:18 }}>👎</span>
+          </button>
+          {flyDownKey && (
+            <span key={`d-${flyDownKey}`} className="dislike-fly">-1</span>
+          )}
         </div>
         {item.tags.length > 0 && (
           <div className="meta" style={{ marginTop: 4 }}>

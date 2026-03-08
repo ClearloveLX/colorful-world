@@ -31,7 +31,7 @@ class FileManager:
             return []
         
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}
+        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp', '.mp3', '.m4a'}
         exts = image_extensions | video_extensions
         seen = set()
         files = []
@@ -48,7 +48,7 @@ class FileManager:
         """仅获取视频文件"""
         if not self.source_folder or not os.path.exists(self.source_folder):
             return []
-        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}
+        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp', '.mp3', '.m4a'}
         seen = set()
         files = []
         for ext in video_extensions:

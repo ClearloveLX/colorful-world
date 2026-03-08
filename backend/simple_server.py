@@ -54,11 +54,17 @@ class Handler(BaseHTTPRequestHandler):
                 tset = set((qs.get('tag_ids', [''])[0]).split(',')) - {''}
                 page = int(qs.get('page', ['1'])[0])
                 page_size = int(qs.get('page_size', ['30'])[0])
+                name_q = (qs.get('name', [''])[0]).strip().lower()
                 all_items = db.get_all_files_with_relations()
                 filtered = []
                 for info in all_items:
                     models = info.get('models', [])
                     tags = info.get('tags', [])
+                    if name_q:
+                        title = (info.get('file', {}).get('original_file_name') or info.get('file', {}).get('file_name') or '').lower()
+                        path_s = (info.get('file', {}).get('file_path') or '').lower()
+                        if (name_q not in title) and (name_q not in path_s):
+                            continue
                     if mset and not any(m['id'] in mset for m in models):
                         continue
                     if tset and not any(t['id'] in tset for t in tags):

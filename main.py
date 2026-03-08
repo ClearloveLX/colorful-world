@@ -9,7 +9,7 @@ import io
 import re
 import queue
 import threading
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import cv2
 from pathlib import Path
 from datetime import datetime
@@ -197,10 +197,15 @@ class ImageClassifierApp:
         # 创建窗口并保存ID
         bottom_window_id = bottom_canvas.create_window((0, 0), window=bottom_section, anchor="nw")
         
-        # 绑定Canvas大小变化，更新内部窗口宽度
+        # 绑定Canvas大小变化，更新内部窗口宽度和高度
         def on_bottom_canvas_configure(event):
             canvas_width = event.width
-            bottom_canvas.itemconfig(bottom_window_id, width=canvas_width)
+            canvas_height = event.height
+            # 确保内容区域至少有一定高度（保留滚动能力），但在空间充足时填充整个区域
+            # 这样可以消除下方的空白区域，同时在窗口过小时保留外层滚动条
+            min_height = 650  # 基于原本的tag_canvas=560 + model_frame=80 + padding
+            target_height = max(canvas_height, min_height)
+            bottom_canvas.itemconfig(bottom_window_id, width=canvas_width, height=target_height)
         bottom_canvas.bind('<Configure>', on_bottom_canvas_configure)
         
         bottom_canvas.configure(yscrollcommand=bottom_scrollbar.set)
@@ -555,7 +560,8 @@ class ImageClassifierApp:
 
     def get_preview_image(self, path):
         ext = os.path.splitext(path)[1].lower()
-        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
+        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp'}
+        audio_exts = {'.mp3', '.m4a'}
         if ext in video_exts:
             cap = cv2.VideoCapture(path)
             ok, frame = cap.read()
@@ -564,12 +570,18 @@ class ImageClassifierApp:
                 raise RuntimeError("无法读取视频帧")
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             return Image.fromarray(rgb)
+        if ext in audio_exts:
+            img = Image.new('RGB', (640, 360), '#eef6ff')
+            d = ImageDraw.Draw(img)
+            d.rectangle([(20,20),(620,340)], outline='#cfe2ff', width=2)
+            d.text((320, 180), '♪', anchor='mm', fill='#2563eb', align='center')
+            return img
         with Image.open(path) as img:
             return img.copy()
 
     def is_video_path(self, path):
         ext = os.path.splitext(path)[1].lower()
-        return ext in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
+        return ext in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp', '.mp3', '.m4a'}
 
     def is_gif_path(self, path):
         return os.path.splitext(path)[1].lower() == '.gif'
@@ -1119,7 +1131,7 @@ class ImageClassifierApp:
 
         # 标签多选
         tag_frame = ttk.LabelFrame(right_frame, text="选择标签（多选）")
-        tag_frame.pack(fill=tk.BOTH, padx=5, pady=5)
+        tag_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         tag_canvas = tk.Canvas(tag_frame, height=1120)
         tag_scrollbar = ttk.Scrollbar(tag_frame, orient="vertical", command=tag_canvas.yview)
         tag_scrollable = ttk.Frame(tag_canvas)
@@ -1175,6 +1187,16 @@ class ImageClassifierApp:
         save_btn.pack(side=tk.LEFT, padx=5)
         stop_btn = ttk.Button(thumbs_toolbar, text="停止生成")
         stop_btn.pack(side=tk.LEFT, padx=5)
+        auto_host_var = tk.BooleanVar(value=False)
+        def toggle_auto_host():
+            v = not bool(auto_host_var.get())
+            auto_host_var.set(v)
+            try:
+                auto_btn.config(text=("取消托管" if v else "自动托管"))
+            except:
+                pass
+        auto_btn = ttk.Button(thumbs_toolbar, text="自动托管", command=toggle_auto_host)
+        auto_btn.pack(side=tk.LEFT, padx=5)
         gen_label = ttk.Label(thumbs_toolbar, text="")
         gen_label.pack(side=tk.LEFT, padx=8)
         cancel_btn = ttk.Button(bottom_frame, text="关闭", command=on_close)
@@ -1206,18 +1228,18 @@ class ImageClassifierApp:
                     groups[key] = {'name': t.get('category_name') or '未分类', 'tags': []}
                     ordered_keys.append(key)
                 groups[key]['tags'].append(t)
-            max_cols = 4
+            max_cols = 8
             for key in ordered_keys:
                 group = groups[key]
                 section = ttk.LabelFrame(tag_scrollable, text=group['name'])
-                section.pack(fill=tk.X, expand=False, padx=5, pady=6)
+                section.pack(fill=tk.X, expand=False, padx=2, pady=2)
                 for c in range(max_cols):
                     section.grid_columnconfigure(c, weight=1)
                 for i, t in enumerate(group['tags']):
                     v = tk.BooleanVar()
                     tag_vars[t['id']] = v
                     cb = ttk.Checkbutton(section, text=t['name'], variable=v)
-                    cb.grid(row=i // max_cols, column=i % max_cols, padx=6, pady=4, sticky="w")
+                    cb.grid(row=i // max_cols, column=i % max_cols, padx=2, pady=1, sticky="w")
 
         def refresh_video_list():
             video_listbox.delete(0, tk.END)
@@ -1260,6 +1282,19 @@ class ImageClassifierApp:
             gen_state["done"] = False
             gen_state["received"] = 0
             gen_state["q"] = queue.Queue(maxsize=8)
+            # 音频文件无需生成缩略图，直接跳过
+            try:
+                ext = os.path.splitext(path)[1].lower()
+            except Exception:
+                ext = ""
+            if ext in {'.mp3', '.m4a'}:
+                gen_state["busy"] = False
+                gen_state["done"] = True
+                gen_state["received"] = 0
+                refresh_btn.config(state=tk.NORMAL)
+                stop_btn.config(state=tk.DISABLED)
+                gen_label.config(text="音频文件无需生成缩略图")
+                return
             refresh_btn.config(state=tk.DISABLED)
             stop_btn.config(state=tk.NORMAL)
             cap = cv2.VideoCapture(path)
@@ -1325,6 +1360,12 @@ class ImageClassifierApp:
                 seg_start = max(0, int(total * (sp / 100.0)))
                 seg_end = min(total, int(total * (ep / 100.0)))
                 positions = [max(seg_start, min(seg_end - 1, int(seg_start + (i/(desired_count+1)) * (seg_end - seg_start)))) for i in range(1, desired_count+1)]
+            try:
+                first_pos = 0
+                positions = [first_pos] + [p for p in positions if p != first_pos]
+                positions = positions[:desired_count]
+            except:
+                pass
             canvas_w = 180
             canvas_h = 120
             cols = 4
@@ -1378,6 +1419,11 @@ class ImageClassifierApp:
                 refresh_btn.config(state=tk.NORMAL)
                 stop_btn.config(state=tk.DISABLED)
                 gen_label.config(text="")
+                try:
+                    if auto_host_var.get() and thumbs_images:
+                        vp.after(0, lambda: (auto_host_var.get() and save_btn.invoke()))
+                except:
+                    pass
             def worker():
                 try:
                     local_cap = cv2.VideoCapture(path)
@@ -1504,10 +1550,15 @@ class ImageClassifierApp:
             if not selected_model.get():
                 messagebox.showwarning("警告", "请选择一个模特")
                 return
-            if not thumbs_images:
-                messagebox.showwarning("警告", "请先生成并选择缩略图")
-                return
             vid_path = displayed_videos[sel[0]]
+            if not thumbs_images:
+                try:
+                    _, ext = os.path.splitext(vid_path)
+                except Exception:
+                    ext = ""
+                if ext.lower() not in {'.mp3', '.m4a'}:
+                    messagebox.showwarning("警告", "请先生成并选择缩略图")
+                    return
             model_id = selected_model.get()
             tag_ids = [tid for tid,var in tag_vars.items() if var.get()]
             def save_worker():
@@ -1526,7 +1577,7 @@ class ImageClassifierApp:
                     else:
                         last = sorted(subs)[-1]
                         last_folder = os.path.join(base_folder, last)
-                        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
+                        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp'}
                         try:
                             cnt = sum(1 for f in os.listdir(last_folder)
                                       if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in video_exts)
@@ -1572,7 +1623,6 @@ class ImageClassifierApp:
                     self.db.set_file_models(file_id, [model_id])
                     self.db.set_file_tags(file_id, tag_ids)
                     def after_success():
-                        messagebox.showinfo("成功", "视频与缩略图已保存")
                         refresh_video_list()
                         if displayed_videos:
                             next_idx = sel[0]
@@ -1793,7 +1843,7 @@ class ImageClassifierApp:
         if not self.model_var.get() and self.last_selected_model_id:
             self.model_var.set(self.last_selected_model_id)
         
-        max_cols = 5
+        max_cols = 8
         groups = {}
         ordered_keys = []
         for tag in all_tags:
@@ -1805,7 +1855,7 @@ class ImageClassifierApp:
         for key in ordered_keys:
             group = groups[key]
             section = ttk.LabelFrame(self.tag_scrollable_frame, text=group['name'])
-            section.pack(fill=tk.X, expand=False, padx=5, pady=4)
+            section.pack(fill=tk.X, expand=False, padx=2, pady=2)
             for c in range(max_cols):
                 section.grid_columnconfigure(c, weight=1)
             for i, tag in enumerate(group['tags']):
@@ -1814,7 +1864,7 @@ class ImageClassifierApp:
                 if tag['id'] in current_tag_ids:
                     var.set(True)
                 cb = ttk.Checkbutton(section, text=tag['name'], variable=var)
-                cb.grid(row=i // max_cols, column=i % max_cols, padx=4, pady=2, sticky="w")
+                cb.grid(row=i // max_cols, column=i % max_cols, padx=2, pady=1, sticky="w")
         
         # 更新Canvas滚动区域
         self.root.update_idletasks()
@@ -2708,13 +2758,13 @@ class ImageClassifierApp:
                     if ft and (ft not in nm.lower()) and (ft not in cn.lower()):
                         continue
                     groups[key]['tags'].append(t)
-                max_cols = 4
+                max_cols = 6
                 for key in ordered_keys:
                     group = groups[key]
                     if not group['tags']:
                         continue
                     section = ttk.LabelFrame(tag_scrollable_frame, text=group['name'])
-                    section.pack(fill=tk.X, expand=False, padx=5, pady=6)
+                    section.pack(fill=tk.X, expand=False, padx=2, pady=2)
                     for c in range(max_cols):
                         section.grid_columnconfigure(c, weight=1)
                     for i, t in enumerate(group['tags']):
@@ -2724,7 +2774,7 @@ class ImageClassifierApp:
                             v.set(True)
                         label_text = t['name']
                         cb = ttk.Checkbutton(section, text=label_text, variable=v)
-                        cb.grid(row=i // max_cols, column=i % max_cols, padx=6, pady=4, sticky="w")
+                        cb.grid(row=i // max_cols, column=i % max_cols, padx=2, pady=1, sticky="w")
             render_checks()
             search_entry2.bind('<KeyRelease>', lambda e: render_checks(search_entry2.get()))
             
@@ -4337,7 +4387,7 @@ class ImageClassifierApp:
             tag_scrollbar.pack(side="right", fill="y")
             
             tag_vars = {}
-            columns = 4
+            columns = 6
             groups = {}
             ordered_keys = []
             for tag in all_tags:
@@ -4352,7 +4402,7 @@ class ImageClassifierApp:
             for key in ordered_keys:
                 group = groups[key]
                 section = ttk.LabelFrame(tag_scrollable_frame, text=group['name'])
-                section.pack(fill=tk.X, expand=False, padx=5, pady=6)
+                section.pack(fill=tk.X, expand=False, padx=2, pady=2)
                 for c in range(columns):
                     section.grid_columnconfigure(c, weight=1)
                 for i, tag in enumerate(group['tags']):
@@ -4361,7 +4411,7 @@ class ImageClassifierApp:
                     if tag['id'] in current_tag_ids:
                         var.set(True)
                     cb = ttk.Checkbutton(section, text=tag['name'], variable=var)
-                    cb.grid(row=i // columns, column=i % columns, sticky="w", padx=6, pady=4)
+                    cb.grid(row=i // columns, column=i % columns, sticky="w", padx=2, pady=1)
             
             def save_tag_changes():
                 """保存标签更改"""
@@ -4814,11 +4864,11 @@ class ImageClassifierApp:
                 groups[key] = {'name': tag.get('category_name') or '未分类', 'tags': []}
                 ordered_keys.append(key)
             groups[key]['tags'].append(tag)
-        max_cols = 4
+        max_cols = 8
         for key in ordered_keys:
             group = groups[key]
             section = ttk.LabelFrame(tag_scrollable_frame, text=group['name'])
-            section.pack(fill=tk.X, expand=False, padx=5, pady=6)
+            section.pack(fill=tk.X, expand=False, padx=2, pady=2)
             for c in range(max_cols):
                 section.grid_columnconfigure(c, weight=1)
             for i, tag in enumerate(group['tags']):
@@ -4828,7 +4878,7 @@ class ImageClassifierApp:
                 var = tk.IntVar()
                 tag_vars[tag_id] = var
                 cb = ttk.Checkbutton(section, text=tag_name, variable=var)
-                cb.grid(row=i // max_cols, column=i % max_cols, padx=6, pady=4, sticky="w")
+                cb.grid(row=i // max_cols, column=i % max_cols, padx=2, pady=1, sticky="w")
         
         # 绑定鼠标滚轮事件到canvas
         def on_mousewheel_tag(event):

@@ -41,7 +41,11 @@ if (Test-Path $frontend) {
   Write-Warn "Frontend folder not found: $frontend"
 }
 
-# 3) Start server (serves API and built frontend)
+# 3) Start open helper (user session)
+Write-Info "Starting open helper"
+powershell -ExecutionPolicy Bypass -NoProfile -File (Join-Path $ROOT "run_open_helper.ps1") -Hidden
+
+# 4) Start server (serves API and built frontend)
 Write-Info "Starting server: http://localhost:8000/"
 Write-Info "Press Ctrl+C to stop"
 & $py -m uvicorn backend.server:app --host 0.0.0.0 --port 8000

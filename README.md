@@ -1,82 +1,45 @@
-# 图片分类管理界面
+# ColorfulWorld
 
-一个基于 Python 的桌面可视化应用，用于手动对图片进行分类管理，支持模特与标签的选择、文件回显与导出、黑名单处理。
+一个本地图片管理与筛选的前后端项目，启动后访问 http://localhost:8000/ 进行使用。
 
-## 功能特点
+## 依赖安装
 
-- 📂 本地文件夹读取：选择源文件夹加载待处理图片
-- 🏷️ 手动分类：按“模特（单选）”和“标签（多选）”保存到数据库
-- 💾 文件落盘：保存后按模特分目录存储到 `data/good/<model_id>/`
-- 🚫 黑名单：将不需要的图片移动到 `data/bad/`
-- 🔎 文件回显：查看已处理文件的预览与信息，支持更改标签与移入黑名单
-- 📦 导出：按模特/标签筛选并导出为 ZIP（直接压缩，无临时复制）
-
-## 安装要求
-
-### Python版本
-- Python 3.8 或更高版本
-
-### 依赖安装
+### 后端
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## 使用方法
+### 前端
 
-1. **启动应用**：
 ```bash
-python main.py
+cd frontend
+npm install
 ```
 
-2. **选择源文件夹**：
-   - 点击"选择源文件夹"按钮
-   - 选择包含待分类图片的文件夹
+## 运行
 
-3. **刷新列表**：点击“刷新列表”加载源文件夹中的图片
+### 方式一：一键启动（推荐，Windows）
 
-4. **手动操作**：
-   - 在右侧文件列表选择图片进行预览
-   - 在“选择模特（单选）”与“选择标签（多选）”中选择
-   - 点击“保存图片”落盘并写入数据库
-   - 点击“加入黑名单”将图片移动到 `data/bad`
-
-## 文件夹结构
-
-```
-ColorfulWorld/
-├── main.py                 # 主程序入口
-├── database.py             # 数据库封装
-├── file_manager.py         # 文件管理器
-├── requirements.txt        # 依赖列表
-└── data/                   # 数据目录
-    ├── good/               # 已保存图片（按模特ID分目录）
-    └── bad/                # 黑名单图片
+```powershell
+.\start.ps1
 ```
 
-## 注意事项
+### 方式二：手动启动
 
-1. **文件移动**：保存或加入黑名单会移动原文件位置，请先备份重要文件。
-2. **性能**：处理大量图片时可能需要一些时间，请耐心等待。
+```bash
+cd frontend
+npm run build
+cd ..
+.\.venv\Scripts\python.exe -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
+```
 
-## 技术栈
+### 数据处理（Windows）
 
-- **GUI框架**：tkinter（Python内置）
-- **图像处理**：OpenCV, Pillow
-- **数据库**：SQLite（内置，单文件）
-
-## 常见问题
-
-**Q: 提示找不到依赖？**
-A: 运行 `pip install -r requirements.txt` 安装依赖。
-
-**Q: 保存后文件去哪了？**
-A: 文件会移动到 `data/good/<model_id>/` 或 `data/bad/`。
-
-## 许可证
-
-本项目仅供学习和研究使用。
-
+```bat
+.\run.bat
+```
 
 
 

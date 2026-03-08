@@ -5,19 +5,25 @@ import type { Model, Tag } from '../types'
 type Props = {
   selectedModels: string[]
   selectedTags: string[]
+  excludedTags: string[]
   strict: boolean
-  order: 'random' | 'duration' | 'recent'
-  onChange: (models: string[], tags: string[], strict: boolean) => void
-  onOrderChange: (order: 'random' | 'duration' | 'recent') => void
+  order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'
+  onChange: (models: string[], tags: string[], excludedTags: string[], strict: boolean) => void
+  onOrderChange: (order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc') => void
+  nameSearch: string
+  onNameSearchChange: (q: string) => void
+  onRandomizeSeed?: () => void
 }
 
-export default function Filters({ selectedModels, selectedTags, strict, order, onChange, onOrderChange }: Props) {
+export default function Filters({ selectedModels, selectedTags, excludedTags, strict, order, onChange, onOrderChange, nameSearch, onNameSearchChange, onRandomizeSeed }: Props) {
   const [models, setModels] = useState<Model[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [modelSearch, setModelSearch] = useState('')
   const [tagSearch, setTagSearch] = useState('')
+  const [tagMode, setTagMode] = useState<'include' | 'exclude'>('include')
   const [modelOpenGroups, setModelOpenGroups] = useState<Record<string, boolean>>({})
   const [tagOpenGroups, setTagOpenGroups] = useState<Record<string, boolean>>({})
+  const [sectionOpen, setSectionOpen] = useState<{ filter: boolean; order: boolean; name: boolean; selected: boolean; models: boolean; tags: boolean }>({ filter: true, order: true, name: true, selected: true, models: true, tags: true })
 
   useEffect(() => {
     fetchModels().then(setModels)
@@ -50,6 +56,16 @@ export default function Filters({ selectedModels, selectedTags, strict, order, o
     else s.add(id)
     return Array.from(s)
   }
+  const applyInclude = (id: string) => {
+    const nextInclude = toggle(selectedTags, id)
+    const nextExclude = excludedTags.filter(t => t !== id)
+    onChange(selectedModels, nextInclude, nextExclude, strict)
+  }
+  const applyExclude = (id: string) => {
+    const nextExclude = toggle(excludedTags, id)
+    const nextInclude = selectedTags.filter(t => t !== id)
+    onChange(selectedModels, nextInclude, nextExclude, strict)
+  }
 
   const filteredModelsByGroup = useMemo(() => {
     const q = modelSearch.trim().toLowerCase()
@@ -67,76 +83,243 @@ export default function Filters({ selectedModels, selectedTags, strict, order, o
 
   return (
     <div className="sidebar">
-      <div className="section-title">筛选</div>
-      <label className="chip" style={{ marginBottom: 12 }}>
-        <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, e.target.checked)} />
-        <span>强关联</span>
-      </label>
+      {(() => {
+        const modelMeta = new Map(models.map(m => [m.id, m]))
+        const tagMeta = new Map(tags.map(t => [t.id, t]))
+        const total = selectedModels.length + selectedTags.length + excludedTags.length
+        if (total === 0) return null
+        return (
+          <div style={{ marginBottom: 12 }}>
+            <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, selected: !s.selected }))}>
+              <span className="section-name">已选</span>
+              <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span className={`caret${sectionOpen.selected ? ' open' : ''}`} />
+                <span className="badge-count">{total}</span>
+              </span>
+            </div>
+            {sectionOpen.selected && (
+              <div style={{ display:'grid', gap:8, marginTop:8 }}>
+                {selectedModels.length > 0 && (
+                  <div>
+                    <div className="section-title" style={{ margin: '0 0 6px' }}>模特</div>
+                    <div className="chips">
+                      {selectedModels.map(id => {
+                        const m = modelMeta.get(id)
+                        return (
+                          <button
+                            key={`sel-m-${id}`}
+                            className="chip selected"
+                            onClick={() => onChange(selectedModels.filter(x => x !== id), selectedTags, excludedTags, strict)}
+                            title="移除该模特"
+                          >
+                            {m?.preview_image_path ? (
+                              <img src={m.preview_image_path} alt={m?.name || id} width={20} height={20} style={{ borderRadius: '50%', objectFit: 'cover' }} />
+                            ) : (
+                              <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#999', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12 }}>{(m?.name || id)[0]}</div>
+                            )}
+                            <span>{m?.name || id}</span>
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        )
+                      })}
+                      <button className="tool-btn" onClick={() => onChange([], selectedTags, excludedTags, strict)}>清空模特</button>
+                    </div>
+                  </div>
+                )}
+                {selectedTags.length > 0 && (
+                  <div>
+                    <div className="section-title" style={{ margin: '0 0 6px' }}>包含标签</div>
+                    <div className="chips">
+                      {selectedTags.map(id => {
+                        const t = tagMeta.get(id)
+                        return (
+                          <button
+                            key={`sel-t-${id}`}
+                            className="tag-chip selected"
+                            onClick={() => onChange(selectedModels, selectedTags.filter(x => x !== id), excludedTags, strict)}
+                            title="移除该标签"
+                          >
+                            <span>{t?.name || id}</span>
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        )
+                      })}
+                      <button className="tool-btn" onClick={() => onChange(selectedModels, [], excludedTags, strict)}>清空包含</button>
+                    </div>
+                  </div>
+                )}
+                {excludedTags.length > 0 && (
+                  <div>
+                    <div className="section-title" style={{ margin: '0 0 6px' }}>排除标签</div>
+                    <div className="chips">
+                      {excludedTags.map(id => {
+                        const t = tagMeta.get(id)
+                        return (
+                          <button
+                            key={`sel-et-${id}`}
+                            className="tag-chip exclude"
+                            onClick={() => onChange(selectedModels, selectedTags, excludedTags.filter(x => x !== id), strict)}
+                            title="移除该排除"
+                          >
+                            <span>{t?.name || id}</span>
+                            <span aria-hidden="true">×</span>
+                          </button>
+                        )
+                      })}
+                      <button className="tool-btn" onClick={() => onChange(selectedModels, selectedTags, [], strict)}>清空排除</button>
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <button className="tool-btn" onClick={() => onChange([], [], [], strict)}>清空全部</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+      <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}>
+        <span className="section-name">筛选</span>
+        <span className={`caret${sectionOpen.filter ? ' open' : ''}`} />
+      </div>
+      {sectionOpen.filter && (
+        <label className="chip" style={{ margin: '12px 0' }}>
+          <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, excludedTags, e.target.checked)} />
+          <span>强关联</span>
+        </label>
+      )}
       <div style={{ marginBottom: 12 }}>
-        <div className="section-title">排序</div>
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          <button className={`sort-btn${order==='random' ? ' active' : ''}`} onClick={() => onOrderChange('random')} title="随机排序">随机</button>
-          <button className={`sort-btn${order==='duration' ? ' active' : ''}`} onClick={() => onOrderChange('duration')} title="按时长排序">时长</button>
+        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, order: !s.order }))}>
+          <span className="section-name">排序</span>
+          <span className={`caret${sectionOpen.order ? ' open' : ''}`} />
         </div>
+        {sectionOpen.order && (
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:8 }}>
+            <button className={`sort-btn${order==='random' ? ' active' : ''}`} onClick={() => onOrderChange('random')} title="随机排序">随机</button>
+            <button className="sort-btn" onClick={() => { onOrderChange('random'); onRandomizeSeed && onRandomizeSeed() }} title="真随机，每次不同">真随机</button>
+            <button 
+              className={`sort-btn${order.startsWith('duration') ? ' active' : ''}`} 
+              onClick={() => onOrderChange(order === 'duration' ? 'duration_asc' : 'duration')} 
+              title={order === 'duration_asc' ? "按时长升序" : "按时长降序"}
+            >
+              时长{order === 'duration' ? '↓' : (order === 'duration_asc' ? '↑' : '')}
+            </button>
+            <button 
+              className={`sort-btn${order.startsWith('recent') ? ' active' : ''}`} 
+              onClick={() => onOrderChange(order === 'recent' ? 'recent_asc' : 'recent')} 
+              title={order === 'recent_asc' ? "按时间升序(旧->新)" : "按时间降序(新->旧)"}
+            >
+              最新{order === 'recent' ? '↓' : (order === 'recent_asc' ? '↑' : '')}
+            </button>
+            <button 
+              className={`sort-btn${order.startsWith('heat') ? ' active' : ''}`} 
+              onClick={() => onOrderChange(order === 'heat' ? 'heat_asc' : 'heat')} 
+              title={order === 'heat_asc' ? "按热度升序(冷->热)" : "按热度降序(热->冷)"}
+            >
+              热度{order === 'heat' ? '↓' : (order === 'heat_asc' ? '↑' : '')}
+            </button>
+          </div>
+        )}
       </div>
       <div style={{ marginBottom: 12 }}>
-        <div className="section-title">模特</div>
-        <input className="search-input" value={modelSearch} onChange={e => setModelSearch(e.target.value)} placeholder="搜索模特或类型" />
-        <div style={{ display: 'grid', gap: 8 }}>
-          {filteredModelsByGroup.map(([group, list]) => (
-            <div key={`model-group-${group}`}>
-              <div className="group-header" onClick={() => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}>
-                <span className="group-name">{group}</span>
-                <span style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <span className={`caret${(modelOpenGroups[group] !== false) ? ' open' : ''}`} />
-                  <span className="badge-count">{list.length}</span>
-                </span>
-              </div>
-              {modelOpenGroups[group] !== false && (
-                <div className="chips" style={{ marginTop: 6 }}>
-                  {list.map(m => (
-                    <label key={m.id} className={`chip ${selectedModels.includes(m.id) ? 'selected' : ''}`}>
-                      <input type="checkbox" checked={selectedModels.includes(m.id)} onChange={() => onChange(toggle(selectedModels, m.id), selectedTags, strict)} />
-                      {m.preview_image_path ? (
-                        <img src={m.preview_image_path} alt={m.name} width={20} height={20} style={{ borderRadius: '50%', objectFit: 'cover' }} />
-                      ) : (
-                        <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#999', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12 }}>{m.name[0]}</div>
-                      )}
-                      <span>{m.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, name: !s.name }))}>
+          <span className="section-name">名称</span>
+          <span className={`caret${sectionOpen.name ? ' open' : ''}`} />
         </div>
+        {sectionOpen.name && (
+          <input className="search-input" value={nameSearch} onChange={e => onNameSearchChange(e.target.value)} placeholder="按名称模糊搜索" />
+        )}
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, models: !s.models }))}>
+          <span className="section-name">模特</span>
+          <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span className={`caret${sectionOpen.models ? ' open' : ''}`} />
+            <span className="badge-count">{models.length}</span>
+          </span>
+        </div>
+        {sectionOpen.models && (
+          <>
+            <input className="search-input" value={modelSearch} onChange={e => setModelSearch(e.target.value)} placeholder="搜索模特或类型" />
+            <div style={{ display: 'grid', gap: 8 }}>
+              {filteredModelsByGroup.map(([group, list]) => (
+                <div key={`model-group-${group}`}>
+                  <div className="group-header" onClick={() => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}>
+                    <span className="group-name">{group}</span>
+                    <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <span className={`caret${(modelOpenGroups[group] !== false) ? ' open' : ''}`} />
+                      <span className="badge-count">{list.length}</span>
+                    </span>
+                  </div>
+                  {modelOpenGroups[group] !== false && (
+                    <div className="chips" style={{ marginTop: 6 }}>
+                      {list.map(m => (
+                        <label key={m.id} className={`chip ${selectedModels.includes(m.id) ? 'selected' : ''}`}>
+                          <input type="checkbox" checked={selectedModels.includes(m.id)} onChange={() => onChange(toggle(selectedModels, m.id), selectedTags, excludedTags, strict)} />
+                          {m.preview_image_path ? (
+                            <img src={m.preview_image_path} alt={m.name} width={20} height={20} style={{ borderRadius: '50%', objectFit: 'cover' }} />
+                          ) : (
+                            <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#999', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12 }}>{m.name[0]}</div>
+                          )}
+                          <span>{m.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
       <div>
-        <div className="section-title">标签</div>
-        <input className="search-input" value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="搜索标签" />
-        <div style={{ display: 'grid', gap: 8 }}>
-          {filteredTagsByGroup.map(([group, list]) => (
-            <div key={group}>
-              <div className="group-header" onClick={() => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}>
-                <span className="group-name">{group}</span>
-                <span style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <span className={`caret${(tagOpenGroups[group] !== false) ? ' open' : ''}`} />
-                  <span className="badge-count">{list.length}</span>
-                </span>
-              </div>
-              {tagOpenGroups[group] !== false && (
-                <div className="chips" style={{ marginTop: 6 }}>
-                  {list.map(t => (
-                    <label key={t.id} className={`tag-chip ${selectedTags.includes(t.id) ? 'selected' : ''}`}>
-                      <input type="checkbox" checked={selectedTags.includes(t.id)} onChange={() => onChange(selectedModels, toggle(selectedTags, t.id), strict)} />
-                      <span>{t.name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, tags: !s.tags }))}>
+          <span className="section-name">标签</span>
+          <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span className={`caret${sectionOpen.tags ? ' open' : ''}`} />
+            <span className="badge-count">{tags.length}</span>
+          </span>
         </div>
+        {sectionOpen.tags && (
+          <>
+            <input className="search-input" value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="搜索标签" />
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', margin: '8px 0 4px' }}>
+              <button className={`tool-btn${tagMode === 'include' ? ' active' : ''}`} type="button" onClick={() => setTagMode('include')}>包含</button>
+              <button className={`tool-btn${tagMode === 'exclude' ? ' active' : ''}`} type="button" onClick={() => setTagMode('exclude')}>排除</button>
+              <span className="muted">包含 {selectedTags.length} · 排除 {excludedTags.length}</span>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {filteredTagsByGroup.map(([group, list]) => (
+                <div key={group}>
+                  <div className="group-header" onClick={() => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}>
+                    <span className="group-name">{group}</span>
+                    <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <span className={`caret${(tagOpenGroups[group] !== false) ? ' open' : ''}`} />
+                      <span className="badge-count">{list.length}</span>
+                    </span>
+                  </div>
+                  {tagOpenGroups[group] !== false && (
+                    <div className="chips" style={{ marginTop: 6 }}>
+                      {list.map(t => (
+                        <label key={t.id} className={`tag-chip${selectedTags.includes(t.id) ? ' selected' : ''}${excludedTags.includes(t.id) ? ' exclude' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={tagMode === 'include' ? selectedTags.includes(t.id) : excludedTags.includes(t.id)}
+                            onChange={() => {
+                              if (tagMode === 'include') applyInclude(t.id)
+                              else applyExclude(t.id)
+                            }}
+                          />
+                          <span>{t.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
