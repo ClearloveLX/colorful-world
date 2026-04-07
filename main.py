@@ -3742,6 +3742,7 @@ class ImageClassifierApp:
         toolbar_frame.pack(fill=tk.X, padx=5, pady=5)
         
         ttk.Button(toolbar_frame, text="刷新", command=lambda: refresh_file_list()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar_frame, text="重复文件处理", command=lambda: open_duplicate_dialog()).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_frame, text="关闭", command=on_close).pack(side=tk.RIGHT, padx=5)
         
         # 搜索框
@@ -4016,6 +4017,166 @@ class ImageClassifierApp:
             append_files(files)
             page_state['offset'] += len(files)
             page_state['loading'] = False
+
+        def _get_duplicate_latest_files():
+            conn = self.db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT md5, COUNT(*) as c, MIN(created_at) as earliest
+                FROM files
+                WHERE md5 IS NOT NULL AND md5 != ''
+                GROUP BY md5
+                HAVING c > 1
+            """)
+            groups = [dict(r) for r in cursor.fetchall()]
+            duplicates = []
+            for g in groups:
+                md5 = g.get('md5')
+                if not md5:
+                    continue
+                cursor.execute("""
+                    SELECT * FROM files WHERE md5 = ? ORDER BY created_at ASC
+                """, (md5,))
+                rows = [dict(r) for r in cursor.fetchall()]
+                if not rows:
+                    continue
+                keep = rows[0]
+                keep_id = keep.get('id')
+                keep_name = keep.get('original_file_name') or keep.get('file_name') or os.path.basename(keep.get('file_path') or '')
+                keep_time = keep.get('created_at') or ''
+                for r in rows[1:]:
+                    r['_dup_keep_id'] = keep_id
+                    r['_dup_keep_name'] = keep_name
+                    r['_dup_keep_time'] = keep_time
+                    duplicates.append(r)
+            conn.close()
+            duplicates.sort(key=lambda x: x.get('created_at') or '', reverse=True)
+            return duplicates
+
+        def _dup_display_text(file):
+            name = file.get('original_file_name') or file.get('file_name') or os.path.basename(file.get('file_path') or '')
+            keep_name = file.get('_dup_keep_name') or ''
+            ct = file.get('created_at') or ''
+            keep_time = file.get('_dup_keep_time') or ''
+            try:
+                models = self.db.get_file_models(file.get('id'))
+            except Exception:
+                models = []
+            mnames = ", ".join([m.get('name') for m in models if m.get('name')]) if models else ""
+            parts = [ct, name]
+            if mnames:
+                parts.insert(1, mnames)
+            if keep_name:
+                parts.append(f"保留：{keep_name} {keep_time}")
+            return " | ".join([p for p in parts if p])
+
+        def _remove_file_record_only(file):
+            try:
+                self.db.delete_file(file.get('id'))
+                return True
+            except Exception:
+                return False
+
+        def _move_to_bad_and_delete(file):
+            file = _normalize_record_for_browser(file)
+            file_path = file.get('file_path')
+            file_id = file.get('id')
+            bad_folder = os.path.join(get_data_root(), "bad")
+            os.makedirs(bad_folder, exist_ok=True)
+            thumb_path = file.get('thumbnail_path')
+            if file_path and os.path.exists(file_path):
+                original_filename = file.get('original_file_name') or file.get('file_name') or os.path.basename(file_path)
+                target_path = os.path.join(bad_folder, original_filename)
+                if os.path.exists(target_path):
+                    name, ext = os.path.splitext(original_filename)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    target_path = os.path.join(bad_folder, f"{name}_{timestamp}{ext}")
+                shutil.move(file_path, target_path)
+            try:
+                if thumb_path and os.path.exists(thumb_path):
+                    thumb_name = os.path.basename(thumb_path)
+                    thumb_target = os.path.join(bad_folder, thumb_name)
+                    if os.path.exists(thumb_target):
+                        tname, text = os.path.splitext(thumb_name)
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        thumb_target = os.path.join(bad_folder, f"{tname}_{ts}{text}")
+                    shutil.move(thumb_path, thumb_target)
+            except Exception:
+                pass
+            try:
+                if file_id:
+                    self.db.delete_file(file_id)
+            except Exception:
+                return False
+            return True
+
+        def open_duplicate_dialog():
+            duplicates = _get_duplicate_latest_files()
+            if not duplicates:
+                messagebox.showinfo("提示", "未找到重复文件")
+                return
+            dlg = tk.Toplevel(browser_window)
+            dlg.title("重复文件处理")
+            dlg.geometry("900x700")
+            dlg.transient(browser_window)
+            dlg.grab_set()
+            top = ttk.Frame(dlg)
+            top.pack(fill=tk.X, padx=10, pady=8)
+            ttk.Label(top, text=f"重复文件 {len(duplicates)} 条（已保留每组最早记录）").pack(side=tk.LEFT)
+            list_frame = ttk.Frame(dlg)
+            list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+            canvas = tk.Canvas(list_frame)
+            scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
+            inner = ttk.Frame(canvas)
+            inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=inner, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            dup_vars = {}
+            for f in duplicates:
+                var = tk.IntVar(value=1)
+                dup_vars[f.get('id')] = var
+                cb = ttk.Checkbutton(inner, text=_dup_display_text(f), variable=var)
+                cb.pack(anchor=tk.W, padx=6, pady=2)
+            btns = ttk.Frame(dlg)
+            btns.pack(fill=tk.X, padx=10, pady=8)
+            def _select_all(v):
+                for var in dup_vars.values():
+                    var.set(v)
+            ttk.Button(btns, text="全选", command=lambda: _select_all(1)).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btns, text="全不选", command=lambda: _select_all(0)).pack(side=tk.LEFT, padx=5)
+            def _collect_selected():
+                ids = {fid for fid, var in dup_vars.items() if var.get() == 1}
+                return [f for f in duplicates if f.get('id') in ids]
+            def _process_remove_only():
+                selected = _collect_selected()
+                if not selected:
+                    messagebox.showwarning("提示", "请先选择要处理的文件")
+                    return
+                ok = 0
+                for f in selected:
+                    if _remove_file_record_only(f):
+                        ok += 1
+                messagebox.showinfo("完成", f"已删除记录 {ok} 条")
+                dlg.destroy()
+                refresh_file_list()
+            def _process_blacklist():
+                selected = _collect_selected()
+                if not selected:
+                    messagebox.showwarning("提示", "请先选择要处理的文件")
+                    return
+                if not messagebox.askyesno("确认", f"确定将选中 {len(selected)} 条加入黑名单并删除记录吗？"):
+                    return
+                ok = 0
+                for f in selected:
+                    if _move_to_bad_and_delete(f):
+                        ok += 1
+                messagebox.showinfo("完成", f"已处理 {ok} 条")
+                dlg.destroy()
+                refresh_file_list()
+            ttk.Button(btns, text="仅删除记录", command=_process_remove_only).pack(side=tk.RIGHT, padx=5)
+            ttk.Button(btns, text="加入黑名单并删除", command=_process_blacklist).pack(side=tk.RIGHT, padx=5)
 
         def load_more_if_needed(event=None):
             if page_state['loading']:
@@ -4776,6 +4937,10 @@ class ImageClassifierApp:
         export_window.title("导出文件")
         export_window.geometry("800x500")
         export_window.transient(self.root)
+        try:
+            export_window.state('zoomed')
+        except Exception:
+            pass
         
         # 记录当前打开的对话框
         self.current_dialog = export_window
@@ -4794,6 +4959,7 @@ class ImageClassifierApp:
         # 创建左右两个选择区域
         selection_frame = ttk.Frame(main_frame)
         selection_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        auto_refresh_var = tk.IntVar(value=1)
         
         # 模特选择区域（左侧）
         model_container = ttk.LabelFrame(selection_frame, text="选择模特（可多选）")
@@ -4822,7 +4988,7 @@ class ImageClassifierApp:
             model_dict[model_name] = model_id
             var = tk.IntVar()
             model_vars[model_id] = var
-            checkbox = ttk.Checkbutton(model_scrollable_frame, text=model_name, variable=var)
+            checkbox = ttk.Checkbutton(model_scrollable_frame, text=model_name, variable=var, command=lambda: (auto_refresh_var.get() and reload_files()))
             checkbox.pack(anchor=tk.W, padx=5, pady=2)
         
         # 绑定鼠标滚轮事件到canvas
@@ -4877,7 +5043,7 @@ class ImageClassifierApp:
                 tag_dict[tag_name] = tag_id
                 var = tk.IntVar()
                 tag_vars[tag_id] = var
-                cb = ttk.Checkbutton(section, text=tag_name, variable=var)
+                cb = ttk.Checkbutton(section, text=tag_name, variable=var, command=lambda: (auto_refresh_var.get() and reload_files()))
                 cb.grid(row=i // max_cols, column=i % max_cols, padx=2, pady=1, sticky="w")
         
         # 绑定鼠标滚轮事件到canvas
@@ -4894,6 +5060,12 @@ class ImageClassifierApp:
         file_container.pack(fill=tk.BOTH, expand=True, pady=5)
         file_controls = ttk.Frame(file_container)
         file_controls.pack(fill=tk.X, padx=5, pady=5)
+        model_name_var = tk.StringVar()
+        ttk.Label(file_controls, text="模特名").pack(side=tk.LEFT, padx=(0, 4))
+        model_name_entry = ttk.Entry(file_controls, textvariable=model_name_var, width=16)
+        model_name_entry.pack(side=tk.LEFT, padx=4)
+        model_name_entry.bind('<Return>', lambda e: reload_files())
+        ttk.Checkbutton(file_controls, text="自动刷新", variable=auto_refresh_var).pack(side=tk.LEFT, padx=6)
         file_vars = {}
         filtered_files_data = []
         file_canvas = tk.Canvas(file_container)
@@ -4909,6 +5081,7 @@ class ImageClassifierApp:
             nonlocal filtered_files_data
             selected_model_ids = [model_id for model_id, var in model_vars.items() if var.get() == 1]
             selected_tag_ids = [tag_id for tag_id, var in tag_vars.items() if var.get() == 1]
+            model_name_q = (model_name_var.get() or '').strip().lower()
             all_files = self.db.get_all_files_with_relations()
             filtered = []
             for info in all_files:
@@ -4921,6 +5094,8 @@ class ImageClassifierApp:
                 tm = True
                 if selected_model_ids:
                     mm = any(m in mids for m in selected_model_ids)
+                if model_name_q:
+                    mm = mm and any(model_name_q in (m.get('name') or '').lower() for m in ms)
                 if selected_tag_ids:
                     tm = any(t in tids for t in selected_tag_ids)
                 if mm and tm:
@@ -4956,9 +5131,9 @@ class ImageClassifierApp:
         file_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         options_frame = ttk.Frame(main_frame)
         options_frame.pack(fill=tk.X, pady=5)
-        compress_var = tk.StringVar(value="stored")
-        ttk.Radiobutton(options_frame, text="最快（不压缩）", variable=compress_var, value="stored").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(options_frame, text="标准（压缩）", variable=compress_var, value="deflated").pack(side=tk.LEFT, padx=5)
+        compress_var = tk.StringVar(value="folder")
+        ttk.Radiobutton(options_frame, text="最快（不压缩，文件夹）", variable=compress_var, value="folder").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(options_frame, text="标准（压缩zip）", variable=compress_var, value="zip").pack(side=tk.LEFT, padx=5)
         deduplicate_var = tk.IntVar(value=1)
         ttk.Checkbutton(options_frame, text="避免重复写入", variable=deduplicate_var).pack(side=tk.LEFT, padx=15)
         ttk.Label(file_scrollable_frame, text="请选择模特/标签后点击“刷新文件列表”加载").pack(anchor=tk.W, padx=5, pady=6)
@@ -4978,14 +5153,27 @@ class ImageClassifierApp:
                 messagebox.showwarning("警告", "请至少选择条件或在文件列表选择文件")
                 return
             
-            # 选择保存位置
-            zip_filename = datetime.now().strftime("%Y%m%d%H%M%S") + ".zip"
-            save_path = filedialog.asksaveasfilename(
-                title="保存导出文件",
-                defaultextension=".zip",
-                filetypes=[("ZIP文件", "*.zip"), ("所有文件", "*.*")],
-                initialfile=zip_filename
-            )
+            mode = compress_var.get()
+            save_path = None
+            if mode == "folder":
+                base_dir = filedialog.askdirectory(title="选择导出文件夹")
+                if not base_dir:
+                    return
+                ts = datetime.now().strftime("%Y%m%d%H%M%S")
+                save_path = os.path.join(base_dir, ts)
+                idx = 1
+                while os.path.exists(save_path):
+                    save_path = os.path.join(base_dir, f"{ts}_{idx}")
+                    idx += 1
+                os.makedirs(save_path, exist_ok=True)
+            else:
+                zip_filename = datetime.now().strftime("%Y%m%d%H%M%S") + ".zip"
+                save_path = filedialog.asksaveasfilename(
+                    title="保存导出文件",
+                    defaultextension=".zip",
+                    filetypes=[("ZIP文件", "*.zip"), ("所有文件", "*.*")],
+                    initialfile=zip_filename
+                )
             
             if not save_path:
                 return  # 用户取消了保存
@@ -4997,7 +5185,7 @@ class ImageClassifierApp:
                     selected_tag_ids,
                     save_path,
                     file_ids=selected_file_ids if selected_file_ids else None,
-                    compression=compress_var.get(),
+                    compression=mode,
                     deduplicate=bool(deduplicate_var.get())
                 )
                 messagebox.showinfo("成功", f"导出完成！\n文件已保存到：\n{save_path}")
@@ -5008,7 +5196,7 @@ class ImageClassifierApp:
         ttk.Button(button_frame, text="导出", command=do_export).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="取消", command=on_close).pack(side=tk.LEFT, padx=5)
     
-    def export_files(self, model_ids, tag_ids, zip_path, file_ids=None, compression="stored", deduplicate=True):
+    def export_files(self, model_ids, tag_ids, zip_path, file_ids=None, compression="folder", deduplicate=True):
         all_files = self.db.get_all_files_with_relations()
         filtered_files = []
         if file_ids:
@@ -5034,11 +5222,21 @@ class ImageClassifierApp:
                     filtered_files.append(file_info)
         if not filtered_files:
             raise Exception("没有找到符合条件的文件")
-        if compression == "deflated":
+        zipf_ctx = None
+        if compression in ("zip", "deflated"):
             zipf_ctx = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1)
-        else:
+        elif compression in ("stored", "zip_stored"):
             zipf_ctx = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED)
-        with zipf_ctx as zipf:
+        else:
+            os.makedirs(zip_path, exist_ok=True)
+        def write_file(path, arcname):
+            if zipf_ctx:
+                zipf_ctx.write(path, arcname)
+            else:
+                dst = os.path.join(zip_path, arcname)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(path, dst)
+        with (zipf_ctx if zipf_ctx else open(os.devnull, 'w')):
             names = set()
             for file_info in filtered_files:
                 file = file_info['file']
@@ -5068,7 +5266,7 @@ class ImageClassifierApp:
                                 arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
                                 counter += 1
                             if os.path.exists(file['file_path']):
-                                zipf.write(file['file_path'], arcname)
+                                write_file(file['file_path'], arcname)
                                 names.add(arcname)
                     else:
                         for model in file_models:
@@ -5085,7 +5283,7 @@ class ImageClassifierApp:
                                             arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
                                             counter += 1
                                         if os.path.exists(file['file_path']):
-                                            zipf.write(file['file_path'], arcname)
+                                            write_file(file['file_path'], arcname)
                                             names.add(arcname)
                 elif model_ids:
                     written = False
@@ -5100,7 +5298,7 @@ class ImageClassifierApp:
                                 arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
                                 counter += 1
                             if os.path.exists(file['file_path']):
-                                zipf.write(file['file_path'], arcname)
+                                write_file(file['file_path'], arcname)
                                 names.add(arcname)
                                 written = True
                 elif tag_ids:
@@ -5116,7 +5314,7 @@ class ImageClassifierApp:
                                 arcname = os.path.join(arc_dir, f"{base}_{counter}{ext}")
                                 counter += 1
                             if os.path.exists(file['file_path']):
-                                zipf.write(file['file_path'], arcname)
+                                write_file(file['file_path'], arcname)
                                 names.add(arcname)
                                 written = True
                 else:
@@ -5127,7 +5325,7 @@ class ImageClassifierApp:
                         arcname = f"{base}_{counter}{ext}"
                         counter += 1
                     if os.path.exists(file['file_path']):
-                        zipf.write(file['file_path'], arcname)
+                        write_file(file['file_path'], arcname)
                         names.add(arcname)
 
 

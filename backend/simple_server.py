@@ -55,11 +55,21 @@ class Handler(BaseHTTPRequestHandler):
                 page = int(qs.get('page', ['1'])[0])
                 page_size = int(qs.get('page_size', ['30'])[0])
                 name_q = (qs.get('name', [''])[0]).strip().lower()
+                min_heat_str = qs.get('min_heat', [''])[0]
+                max_heat_str = qs.get('max_heat', [''])[0]
+                min_heat = int(min_heat_str) if min_heat_str else None
+                max_heat = int(max_heat_str) if max_heat_str else None
                 all_items = db.get_all_files_with_relations()
                 filtered = []
                 for info in all_items:
                     models = info.get('models', [])
                     tags = info.get('tags', [])
+                    f_info = info.get('file', {})
+                    heat_val = f_info.get('heat_value') or 0
+                    if min_heat is not None and heat_val < min_heat:
+                        continue
+                    if max_heat is not None and heat_val > max_heat:
+                        continue
                     if name_q:
                         title = (info.get('file', {}).get('original_file_name') or info.get('file', {}).get('file_name') or '').lower()
                         path_s = (info.get('file', {}).get('file_path') or '').lower()

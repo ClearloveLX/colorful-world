@@ -58,6 +58,8 @@ export type MediaQuery = {
   page?: number
   page_size?: number
   strict?: boolean
+  min_heat?: number
+  max_heat?: number
   order?: 'recent' | 'recent_asc' | 'random' | 'duration' | 'duration_asc' | 'heat' | 'heat_asc'
   seed?: number
   name?: string
@@ -71,6 +73,8 @@ export async function fetchMedia(params: MediaQuery): Promise<{ items: MediaItem
     page: params.page ?? 1,
     page_size: params.page_size ?? 30,
     strict: params.strict ?? true,
+    min_heat: params.min_heat,
+    max_heat: params.max_heat,
     order: params.order,
     seed: params.seed,
     name: (params.name ?? '').trim() || undefined

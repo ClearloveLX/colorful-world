@@ -12,6 +12,8 @@ type Props = {
   tagIds: string[]
   excludeTagIds: string[]
   strict: boolean
+  minHeat?: number
+  maxHeat?: number
   order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'
   seed: number
   nameSearch?: string
@@ -19,7 +21,7 @@ type Props = {
   onModelClick?: (id: string) => void
 }
 
-export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, order, seed, nameSearch = '', onTagClick, onModelClick }: Props) {
+export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, seed, nameSearch = '', onTagClick, onModelClick }: Props) {
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
@@ -40,6 +42,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, ord
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [pickerOpen, setPickerOpen] = useState<{ type:'add'|'remove'|null }>({ type: null })
   const [tagMeta, setTagMeta] = useState<Map<string, { name: string; category_name?: string | null }>>(new Map())
+  const [refreshKey, setRefreshKey] = useState(0)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const dragSelectingRef = useRef<boolean>(false)
   const blockClickRef = useRef<boolean>(false)
@@ -84,6 +87,22 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, ord
     blockClickRef.current = false
     setDragSelecting(false)
     setSelectRect(null)
+  }, [selectMode])
+  const resetToFirstPage = () => {
+    setItems([])
+    setPage(1)
+    setHasMore(true)
+    fetchedKeysRef.current.clear()
+    initialLoadedRef.current = false
+  }
+  const triggerRefresh = () => {
+    resetToFirstPage()
+    setSelectedIds(new Set())
+    setRefreshKey(k => k + 1)
+  }
+  useEffect(() => {
+    if (!selectMode) return
+    resetToFirstPage()
   }, [selectMode])
 
   useEffect(() => { setVMeta(null) }, [selectedIndex])
@@ -235,22 +254,18 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, ord
   }, [items, colCount, colWidth])
 
   useEffect(() => {
-    setItems([])
-    setPage(1)
-    setHasMore(true)
-    fetchedKeysRef.current.clear()
+    resetToFirstPage()
     setReloadHint(true)
-    initialLoadedRef.current = false
     const sName = nameSearch.trim().toLowerCase()
-    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${order}|${seed}|${sName}`
+    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${seed}|${sName}|${refreshKey}`
     const t = setTimeout(() => setReloadHint(false), 1200)
     return () => clearTimeout(t)
-  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, order, nameSearch, seed])
+  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, nameSearch, seed, refreshKey])
 
   useEffect(() => {
     const run = async () => {
       if (!hasMore || loading) return
-      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${order}|${seed}|${nameSearch.trim().toLowerCase()}`
+      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
       const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
       fetchedKeysRef.current.add(key)
@@ -288,26 +303,29 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, ord
         }
         return chosen
       }
-      const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, exclude_tag_ids: excludeTagIds, page, page_size: 30, strict, order, seed, name: nameSearch })
+      const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, exclude_tag_ids: excludeTagIds, page, page_size: 30, strict, min_heat: minHeat, max_heat: maxHeat, order, seed, name: nameSearch })
       if (filterKeyRef.current !== filterSig) { setLoading(false); return }
+      const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || minHeat !== undefined || maxHeat !== undefined
+      let addedCount = 0
       setItems(prev => {
         const seen = new Set(prev.map(i => i.id))
         const merged = [...prev]
-        const diversified = applyPerModelLimit(res.items, 2, 30)
+        const diversified = (order === 'random' && !hasFilters) ? applyPerModelLimit(res.items, 2, 30) : res.items
         for (const it of diversified) {
           if (!seen.has(it.id)) {
             seen.add(it.id)
             merged.push(it)
+            addedCount += 1
           }
         }
         return merged
       })
-      setHasMore(res.hasMore)
+      setHasMore(res.items.length > 0 ? res.hasMore : false)
       setLoading(false)
       if (page === 1) initialLoadedRef.current = true
     }
     run()
-  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, order, seed, nameSearch, loading, hasMore])
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, seed, nameSearch, refreshKey, loading, hasMore])
 
   useEffect(() => {
     const el = sentinel.current
@@ -355,6 +373,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, ord
           selectedCount={selectedIds.size}
           onAddTags={() => setPickerOpen({ type:'add' })}
           onRemoveTags={() => setPickerOpen({ type:'remove' })}
+          onRefresh={() => triggerRefresh()}
           onSelectAll={() => {
             try {
               const all = new Set(items.map(i => i.id))

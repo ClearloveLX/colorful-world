@@ -130,97 +130,99 @@ def get_media(
     page: int = 1,
     page_size: int = 30,
     strict: bool = True,
+    min_heat: Optional[int] = Query(default=None),
+    max_heat: Optional[int] = Query(default=None),
     order: Optional[str] = Query(default=None),
     seed: Optional[int] = Query(default=None),
     name: Optional[str] = Query(default=None),
 ):
-    mset = [s for s in (model_ids or '').split(',') if s]
-    tset = [s for s in (tag_ids or '').split(',') if s]
-    exset = [s for s in (exclude_tag_ids or '').split(',') if s]
-    offset = max((page - 1) * page_size, 0)
-    # 数据库级过滤与分页
-    rows = db.query_files_with_filters(model_ids=mset or None, tag_ids=tset or None, exclude_tag_ids=exset or None, strict=strict, offset=offset, limit=page_size, order=(order or 'recent'), seed=seed, name=name)
-    # 组装关联数据
-    slice_items = []
-    # 预加载标签元数据用于排序与分组
-    tag_rows = db.get_tags_with_category_name(only_active=False)
-    tag_meta = { r['id']: {
-        'name': r['name'],
-        'category_id': r.get('category_id'),
-        'category_name': r.get('category_name') or None,
-        'tag_order': r.get('sort_order') or 0,
-    } for r in tag_rows }
-    categories = db.get_all_tag_categories()
-    cat_order = { c['id']: c.get('sort_order') or 0 for c in categories }
-    types = { t['id']: t['name'] for t in db.get_all_model_types() }
-    def sort_key(tid: str):
-        info = tag_meta.get(tid)
-        if not info:
-            return (0, '', 0, '')
-        return (cat_order.get(info['category_id']) or 0, info['category_name'] or '', info['tag_order'] or 0, info['name'] or '')
-    for f in rows:
-        ft = (f.get("file_type") or "").lower()
-        file_id = f['id']
-        models = db.get_file_models(file_id)
-        file_tags = db.get_file_tags(file_id)
-        model_tags = []
-        for m in models:
-            try:
-                model_tags.extend(db.get_model_tags(m['id']))
-            except Exception:
-                pass
-        # 去重后按分类与序号排序
-        seen: set[str] = set()
-        merged_ids = []
-        for t in (file_tags + model_tags):
-            tid = t.get('id')
-            if not tid or tid in seen:
-                continue
-            seen.add(tid)
-            merged_ids.append(tid)
-        merged_ids.sort(key=sort_key)
-        merged_tags = [{ 'id': tid, 'name': (tag_meta.get(tid) or {}).get('name') or '', 'category_name': (tag_meta.get(tid) or {}).get('category_name') or None } for tid in merged_ids]
-        slice_items.append({ 'file': f, 'models': models, 'tags': merged_tags })
-    def to_url(p: Optional[str]) -> Optional[str]:
-        return _to_static_url(p)
-    result = []
-    for info in slice_items:
-        f = info["file"]
-        sz = f.get("file_size")
-        if not sz:
-            try:
-                p = f.get("file_path")
-                if p and os.path.isfile(p):
-                    sz = os.path.getsize(p)
-            except Exception:
-                sz = None
-        ft = (f.get("file_type") or "").lower()
-        thumb = f.get("thumbnail_path")
-        if (ft in ("mp3", "m4a")) and not thumb:
-            svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#eef6ff"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#2563eb" font-size="72">♫</text></svg>'
-            try:
-                thumb = "data:image/svg+xml," + urllib.parse.quote(svg)
-            except Exception:
-                thumb = None
-        result.append({
-            "id": f["id"],
-            "title": f.get("original_file_name") or f.get("file_name") or f.get("id"),
-            "file_path": to_url(f.get("file_path")),
-            "file_type": f.get("file_type") or "unknown",
-            "thumbnail_path": to_url(thumb if thumb else f.get("thumbnail_path")),
-            "file_size": sz,
-            "image_width": f.get("image_width"),
-            "image_height": f.get("image_height"),
-            "video_width": f.get("video_width"),
-            "video_height": f.get("video_height"),
-            "duration_ms": f.get("duration_ms"),
-            "heat_value": f.get("heat_value"),
-            "models": [{"id": m["id"], "name": m["name"], "type": (types.get(m.get("model_type_id")) or m.get("model_type") or None), "preview_image_path": m.get("preview_image_path") or None} for m in info.get("models", [])],
-            "tags": [{"id": t.get("id"), "name": t.get("name"), "category_name": t.get("category_name")} for t in info.get("tags", [])],
-            "created_at": f.get("created_at"),
-        })
-    has_more = len(rows) == page_size
-    return {"items": result, "hasMore": has_more}
+    try:
+        mset = [s for s in (model_ids or '').split(',') if s]
+        tset = [s for s in (tag_ids or '').split(',') if s]
+        exset = [s for s in (exclude_tag_ids or '').split(',') if s]
+        offset = max((page - 1) * page_size, 0)
+        rows = db.query_files_with_filters(model_ids=mset or None, tag_ids=tset or None, exclude_tag_ids=exset or None, strict=strict, min_heat=min_heat, max_heat=max_heat, offset=offset, limit=page_size, order=(order or 'recent'), seed=seed, name=name)
+        slice_items = []
+        tag_rows = db.get_tags_with_category_name(only_active=False)
+        tag_meta = { r['id']: {
+            'name': r['name'],
+            'category_id': r.get('category_id'),
+            'category_name': r.get('category_name') or None,
+            'tag_order': r.get('sort_order') or 0,
+        } for r in tag_rows }
+        categories = db.get_all_tag_categories()
+        cat_order = { c['id']: c.get('sort_order') or 0 for c in categories }
+        types = { t['id']: t['name'] for t in db.get_all_model_types() }
+        def sort_key(tid: str):
+            info = tag_meta.get(tid)
+            if not info:
+                return (0, '', 0, '')
+            return (cat_order.get(info['category_id']) or 0, info['category_name'] or '', info['tag_order'] or 0, info['name'] or '')
+        for f in rows:
+            ft = (f.get("file_type") or "").lower()
+            file_id = f['id']
+            models = db.get_file_models(file_id)
+            file_tags = db.get_file_tags(file_id)
+            model_tags = []
+            for m in models:
+                try:
+                    model_tags.extend(db.get_model_tags(m['id']))
+                except Exception:
+                    pass
+            seen: set[str] = set()
+            merged_ids = []
+            for t in (file_tags + model_tags):
+                tid = t.get('id')
+                if not tid or tid in seen:
+                    continue
+                seen.add(tid)
+                merged_ids.append(tid)
+            merged_ids.sort(key=sort_key)
+            merged_tags = [{ 'id': tid, 'name': (tag_meta.get(tid) or {}).get('name') or '', 'category_name': (tag_meta.get(tid) or {}).get('category_name') or None } for tid in merged_ids]
+            slice_items.append({ 'file': f, 'models': models, 'tags': merged_tags })
+        def to_url(p: Optional[str]) -> Optional[str]:
+            return _to_static_url(p)
+        result = []
+        for info in slice_items:
+            f = info["file"]
+            sz = f.get("file_size")
+            if not sz:
+                try:
+                    p = f.get("file_path")
+                    if p and os.path.isfile(p):
+                        sz = os.path.getsize(p)
+                except Exception:
+                    sz = None
+            ft = (f.get("file_type") or "").lower()
+            thumb = f.get("thumbnail_path")
+            if (ft in ("mp3", "m4a")) and not thumb:
+                svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#eef6ff"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#2563eb" font-size="72">♫</text></svg>'
+                try:
+                    thumb = "data:image/svg+xml," + urllib.parse.quote(svg)
+                except Exception:
+                    thumb = None
+            result.append({
+                "id": f["id"],
+                "title": f.get("original_file_name") or f.get("file_name") or f.get("id"),
+                "file_path": to_url(f.get("file_path")),
+                "file_type": f.get("file_type") or "unknown",
+                "thumbnail_path": to_url(thumb if thumb else f.get("thumbnail_path")),
+                "file_size": sz,
+                "image_width": f.get("image_width"),
+                "image_height": f.get("image_height"),
+                "video_width": f.get("video_width"),
+                "video_height": f.get("video_height"),
+                "duration_ms": f.get("duration_ms"),
+                "heat_value": f.get("heat_value"),
+                "models": [{"id": m["id"], "name": m["name"], "type": (types.get(m.get("model_type_id")) or m.get("model_type") or None), "preview_image_path": m.get("preview_image_path") or None} for m in info.get("models", [])],
+                "tags": [{"id": t.get("id"), "name": t.get("name"), "category_name": t.get("category_name")} for t in info.get("tags", [])],
+                "created_at": f.get("created_at"),
+            })
+        has_more = len(rows) == page_size
+        return {"items": result, "hasMore": has_more}
+    except Exception as e:
+        print("get_media error", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 直接按绝对路径返回本地文件（用于 DATA_ROOT 在其他盘符时）
 def _guess_content_type(p: str) -> str:

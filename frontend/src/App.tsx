@@ -8,6 +8,8 @@ export default function App() {
   const [tagIds, setTagIds] = useState<string[]>([])
   const [excludeTagIds, setExcludeTagIds] = useState<string[]>([])
   const [strict, setStrict] = useState<boolean>(true)
+  const [minHeat, setMinHeat] = useState<number | undefined>()
+  const [maxHeat, setMaxHeat] = useState<number | undefined>()
   const [order, setOrder] = useState<'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'>('random')
   const [nameSearch, setNameSearch] = useState<string>('')
   const [locked, setLocked] = useState<boolean>(true)
@@ -22,6 +24,7 @@ export default function App() {
   })()
   const [seed, setSeed] = useState<number>(seedInit)
   const [showTop, setShowTop] = useState(false)
+  const idleTimerRef = useRef<number | null>(null)
   useEffect(() => {
     const onScroll = () => {
       setShowTop(window.scrollY > 600)
@@ -30,6 +33,34 @@ export default function App() {
     onScroll()
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
+  useEffect(() => {
+    if (locked) {
+      if (idleTimerRef.current) {
+        window.clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = null
+      }
+      return
+    }
+    const resetIdle = () => {
+      if (idleTimerRef.current) window.clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = window.setTimeout(() => {
+        setLocked(true)
+        setCode('')
+        setError('')
+      }, 10 * 60 * 1000)
+    }
+    const onActivity = () => resetIdle()
+    const events: Array<keyof WindowEventMap> = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel']
+    events.forEach(evt => window.addEventListener(evt, onActivity, { passive: true }))
+    resetIdle()
+    return () => {
+      if (idleTimerRef.current) {
+        window.clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = null
+      }
+      events.forEach(evt => window.removeEventListener(evt, onActivity))
+    }
+  }, [locked])
   const onSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     setError('')
@@ -90,6 +121,8 @@ export default function App() {
             selectedTags={tagIds}
             excludedTags={excludeTagIds}
             strict={strict}
+            minHeat={minHeat}
+            maxHeat={maxHeat}
             order={order}
             nameSearch={nameSearch}
             onRandomizeSeed={() => setSeed(Date.now() + Math.floor(Math.random()*1e9))}
@@ -99,6 +132,10 @@ export default function App() {
               setExcludeTagIds(ex)
               setStrict(s)
             }}
+            onHeatChange={(min, max) => {
+              setMinHeat(min)
+              setMaxHeat(max)
+            }}
             onOrderChange={(o) => setOrder(o)}
             onNameSearchChange={(q) => setNameSearch(q)}
           />
@@ -107,6 +144,8 @@ export default function App() {
             tagIds={tagIds}
             excludeTagIds={excludeTagIds}
             strict={strict}
+            minHeat={minHeat}
+            maxHeat={maxHeat}
             order={order}
             nameSearch={nameSearch}
             seed={seed}

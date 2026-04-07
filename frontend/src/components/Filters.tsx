@@ -7,15 +7,18 @@ type Props = {
   selectedTags: string[]
   excludedTags: string[]
   strict: boolean
+  minHeat?: number
+  maxHeat?: number
   order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'
   onChange: (models: string[], tags: string[], excludedTags: string[], strict: boolean) => void
+  onHeatChange?: (min?: number, max?: number) => void
   onOrderChange: (order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc') => void
   nameSearch: string
   onNameSearchChange: (q: string) => void
   onRandomizeSeed?: () => void
 }
 
-export default function Filters({ selectedModels, selectedTags, excludedTags, strict, order, onChange, onOrderChange, nameSearch, onNameSearchChange, onRandomizeSeed }: Props) {
+export default function Filters({ selectedModels, selectedTags, excludedTags, strict, minHeat, maxHeat, order, onChange, onHeatChange, onOrderChange, nameSearch, onNameSearchChange, onRandomizeSeed }: Props) {
   const [models, setModels] = useState<Model[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [modelSearch, setModelSearch] = useState('')
@@ -183,10 +186,38 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         <span className={`caret${sectionOpen.filter ? ' open' : ''}`} />
       </div>
       {sectionOpen.filter && (
-        <label className="chip" style={{ margin: '12px 0' }}>
-          <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, excludedTags, e.target.checked)} />
-          <span>强关联</span>
-        </label>
+        <div style={{ margin: '12px 0' }}>
+          <label className="chip" style={{ display: 'inline-flex', marginBottom: 8 }}>
+            <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, excludedTags, e.target.checked)} />
+            <span>强关联</span>
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <span className="muted">热度：</span>
+            <input
+              type="number"
+              className="search-input"
+              style={{ width: 60, padding: '4px 8px', margin: 0 }}
+              placeholder="最小"
+              value={minHeat ?? ''}
+              onChange={e => {
+                const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+                onHeatChange && onHeatChange(val, maxHeat)
+              }}
+            />
+            <span className="muted">-</span>
+            <input
+              type="number"
+              className="search-input"
+              style={{ width: 60, padding: '4px 8px', margin: 0 }}
+              placeholder="最大"
+              value={maxHeat ?? ''}
+              onChange={e => {
+                const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+                onHeatChange && onHeatChange(minHeat, val)
+              }}
+            />
+          </div>
+        </div>
       )}
       <div style={{ marginBottom: 12 }}>
         <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, order: !s.order }))}>

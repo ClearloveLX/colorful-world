@@ -29,12 +29,18 @@ $frontend = Join-Path $ROOT "frontend"
 if (Test-Path $frontend) {
   Write-Info "Building frontend (vite)"
   Push-Location $frontend
-  if (Test-Path "package-lock.json") {
-    cmd /c npm ci
-  } else {
-    cmd /c npm install
+  $installCmd = if (Test-Path "package-lock.json") { "npm ci" } else { "npm install" }
+  $npmOk = $false
+  for ($i = 0; $i -lt 2; $i++) {
+    cmd /c $installCmd
+    if ($LASTEXITCODE -eq 0) { $npmOk = $true; break }
+    if ($i -eq 0) {
+      try { Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force } catch {}
+    }
   }
+  if (-not $npmOk) { throw "npm install failed. Please close editors/antivirus and retry." }
   cmd /c npm run build
+  if ($LASTEXITCODE -ne 0) { throw "npm run build failed." }
   Pop-Location
   Write-Ok "Frontend built"
 } else {
