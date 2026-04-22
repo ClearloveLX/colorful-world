@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchMedia, bulkAddTags, bulkRemoveTags, fetchTags } from '../api'
+import { fetchMedia, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, fetchTags } from '../api'
 import type { MediaItem } from '../types'
 import MediaCard from './MediaCard'
 import Lightbox from './Lightbox'
@@ -43,6 +43,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [pickerOpen, setPickerOpen] = useState<{ type:'add'|'remove'|null }>({ type: null })
   const [tagMeta, setTagMeta] = useState<Map<string, { name: string; category_name?: string | null }>>(new Map())
   const [refreshKey, setRefreshKey] = useState(0)
+  const [heatBusy, setHeatBusy] = useState<boolean>(false)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const dragSelectingRef = useRef<boolean>(false)
   const blockClickRef = useRef<boolean>(false)
@@ -100,10 +101,48 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     setSelectedIds(new Set())
     setRefreshKey(k => k + 1)
   }
+  const applyBulkHeat = async (delta: number) => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0 || heatBusy) return
+    setHeatBusy(true)
+    try {
+      await bulkUpdateHeat(ids, delta)
+      const step = delta >= 0 ? 1 : -1
+      setItems(prev => prev.map(it => (
+        selectedIds.has(it.id)
+          ? { ...it, heat_value: Number(it.heat_value ?? 0) + step }
+          : it
+      )))
+    } catch {
+      // 失败时保持原状
+    } finally {
+      setHeatBusy(false)
+    }
+  }
   useEffect(() => {
     if (!selectMode) return
     resetToFirstPage()
   }, [selectMode])
+  useEffect(() => {
+    if (!selectMode) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase() || ''
+      const editable = tag === 'input' || tag === 'textarea' || target?.isContentEditable
+      if (editable) return
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        setSelectedIds(new Set(items.map(i => i.id)))
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSelectedIds(new Set())
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [selectMode, items])
 
   useEffect(() => { setVMeta(null) }, [selectedIndex])
   useEffect(() => {
@@ -373,6 +412,8 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           selectedCount={selectedIds.size}
           onAddTags={() => setPickerOpen({ type:'add' })}
           onRemoveTags={() => setPickerOpen({ type:'remove' })}
+          onIncreaseHeat={() => { void applyBulkHeat(1) }}
+          onDecreaseHeat={() => { void applyBulkHeat(-1) }}
           onRefresh={() => triggerRefresh()}
           onSelectAll={() => {
             try {
@@ -392,6 +433,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
               window.history.replaceState({}, '', url.toString())
             } catch {}
           }}
+          heatBusy={heatBusy}
         />
       )}
       {reloadHint && (
@@ -476,10 +518,16 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         />
       )}
       {!loading && items.length === 0 && (<div className="muted" style={{ textAlign:'center', padding:24 }}>暂无内容，试试关闭强关联或减少筛选条件</div>)}
+      {selectMode && (
+        <div className="muted" style={{ textAlign: 'center', paddingBottom: 8 }} aria-live="polite">
+          快捷键：Ctrl/Cmd+A 全选已加载，Esc 清空选择
+        </div>
+      )}
       <div ref={sentinel} />
       {loading && items.length > 0 && (
         <div style={{ textAlign:'center', padding:16 }}>
           <div className="spinner" />
+          <div className="muted" style={{ marginTop: 8 }}>正在加载更多…</div>
         </div>
       )}
       {!hasMore && <div className="muted" style={{ textAlign:'center', padding:16 }}>没有更多了</div>}

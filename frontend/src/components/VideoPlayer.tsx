@@ -225,7 +225,7 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
   const srcUrl = `${src}${src.includes('?') ? '&' : '?'}t=${srcToken}`
 
   return (
-    <div ref={wrapRef} style={wrapStyle}>
+    <div ref={wrapRef} style={wrapStyle} className={`video-player-wrap${fs ? ' is-fullscreen' : ''}`}>
       <video
         ref={ref}
         src={srcUrl}
@@ -241,18 +241,18 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
         preload="metadata"
         loop
       />
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <button className="pill pill-dark clickable" onClick={togglePlay}>{playing ? '暂停' : '播放'}</button>
-        <button className="pill pill-dark clickable" onClick={toggleFs}>{fs ? '退出全屏' : '全屏'}</button>
+      <div className="video-controls-row">
+        <button className="video-btn" onClick={togglePlay}>{playing ? '暂停' : '播放'}</button>
+        <button className="video-btn" onClick={toggleFs}>{fs ? '退出全屏' : '全屏'}</button>
         <span className="muted">{fmt(cur)} / {fmt(dur)}</span>
-        <input type="range" min={0} max={dur || 0} step={0.1} value={Math.min(cur, dur || 0)} onChange={onSeek} style={{ flex:1 }} />
+        <input className="video-range" type="range" min={0} max={dur || 0} step={0.1} value={Math.min(cur, dur || 0)} onChange={onSeek} style={{ flex:1 }} />
       </div>
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <button className="pill pill-dark clickable" onClick={() => setMuted(m => !m)}>{muted ? '取消静音' : '静音'}</button>
-        <input type="range" min={0} max={1} step={0.01} value={muted ? 0 : vol} onChange={e => setVol(Number(e.target.value))} style={{ width:160 }} />
+      <div className="video-controls-row">
+        <button className="video-btn" onClick={() => setMuted(m => !m)}>{muted ? '取消静音' : '静音'}</button>
+        <input className="video-range" type="range" min={0} max={1} step={0.01} value={muted ? 0 : vol} onChange={e => setVol(Number(e.target.value))} style={{ width:160 }} />
         <div ref={rateWrapRef} style={{ position:'relative' }}>
           <button
-            className="pill pill-dark clickable"
+            className="video-btn"
             ref={rateBtnRef}
             onClick={() => {
               setRateOpen(o => {
@@ -275,15 +275,11 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
           {rateOpen && menuPos && createPortal(
             <div
               ref={menuRef}
+              className="video-rate-menu"
               style={{
                 position:'fixed',
                 top: menuPos.top,
                 left: menuPos.left,
-                background:'#1f2430',
-                color:'#fff',
-                border:'1px solid #343b48',
-                borderRadius:10,
-                boxShadow:'0 10px 28px rgba(0,0,0,0.45)',
                 padding:8,
                 minWidth:160,
                 maxHeight:'50vh',
@@ -295,18 +291,14 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
                 <button
                   key={`rate-${v}`}
                   onClick={() => { setRate(v); setRateOpen(false) }}
-                  className="clickable"
+                  className={`video-rate-item${v === rate ? ' active' : ''}`}
                   style={{
                     display:'block',
                     width:'100%',
                     textAlign:'left',
                     padding:'10px 12px',
-                    borderRadius:8,
                     margin:'2px 0',
-                    fontSize:16,
-                    background: v === rate ? '#3b82f6' : '#2b3140',
-                    color: v === rate ? '#fff' : '#e5e7eb',
-                    border: v === rate ? '1px solid #3b82f6' : '1px solid #3a4050'
+                    fontSize:16
                   }}
                 >
                   {rateLabel(v)}

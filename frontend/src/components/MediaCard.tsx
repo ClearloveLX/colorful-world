@@ -135,6 +135,9 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
       })().catch(() => {})
     } catch {}
   }, [item.id, item.file_path, item.file_size])
+  useEffect(() => {
+    setHeat(Number(item.heat_value ?? 0))
+  }, [item.id, item.heat_value])
   const onLike = async (e: React.MouseEvent) => {
     e.stopPropagation()
     const now = Date.now()

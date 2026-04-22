@@ -83,6 +83,12 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
     if (!q) return entries
     return entries.map(([g, list]) => [g, list.filter(t => `${t.name}${t.category_name ?? ''}`.toLowerCase().includes(q))] as [string, Tag[]])
   }, [tagGroups, tagSearch])
+  const onToggleKey = (e: React.KeyboardEvent, fn: () => void) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      fn()
+    }
+  }
 
   return (
     <div className="sidebar">
@@ -93,7 +99,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         if (total === 0) return null
         return (
           <div style={{ marginBottom: 12 }}>
-            <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, selected: !s.selected }))}>
+            <div
+              className="section-header"
+              role="button"
+              tabIndex={0}
+              onClick={() => setSectionOpen(s => ({ ...s, selected: !s.selected }))}
+              onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, selected: !s.selected })))}
+            >
               <span className="section-name">已选</span>
               <span style={{ display:'flex', alignItems:'center', gap:8 }}>
                 <span className={`caret${sectionOpen.selected ? ' open' : ''}`} />
@@ -181,7 +193,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
           </div>
         )
       })()}
-      <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}>
+      <div
+        className="section-header"
+        role="button"
+        tabIndex={0}
+        onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}
+        onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, filter: !s.filter })))}
+      >
         <span className="section-name">筛选</span>
         <span className={`caret${sectionOpen.filter ? ' open' : ''}`} />
       </div>
@@ -220,7 +238,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         </div>
       )}
       <div style={{ marginBottom: 12 }}>
-        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, order: !s.order }))}>
+        <div
+          className="section-header"
+          role="button"
+          tabIndex={0}
+          onClick={() => setSectionOpen(s => ({ ...s, order: !s.order }))}
+          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, order: !s.order })))}
+        >
           <span className="section-name">排序</span>
           <span className={`caret${sectionOpen.order ? ' open' : ''}`} />
         </div>
@@ -253,7 +277,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         )}
       </div>
       <div style={{ marginBottom: 12 }}>
-        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, name: !s.name }))}>
+        <div
+          className="section-header"
+          role="button"
+          tabIndex={0}
+          onClick={() => setSectionOpen(s => ({ ...s, name: !s.name }))}
+          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, name: !s.name })))}
+        >
           <span className="section-name">名称</span>
           <span className={`caret${sectionOpen.name ? ' open' : ''}`} />
         </div>
@@ -262,7 +292,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         )}
       </div>
       <div style={{ marginBottom: 12 }}>
-        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, models: !s.models }))}>
+        <div
+          className="section-header"
+          role="button"
+          tabIndex={0}
+          onClick={() => setSectionOpen(s => ({ ...s, models: !s.models }))}
+          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, models: !s.models })))}
+        >
           <span className="section-name">模特</span>
           <span style={{ display:'flex', alignItems:'center', gap:8 }}>
             <span className={`caret${sectionOpen.models ? ' open' : ''}`} />
@@ -275,7 +311,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
             <div style={{ display: 'grid', gap: 8 }}>
               {filteredModelsByGroup.map(([group, list]) => (
                 <div key={`model-group-${group}`}>
-                  <div className="group-header" onClick={() => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}>
+                  <div
+                    className="group-header"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}
+                    onKeyDown={(e) => onToggleKey(e, () => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) })))}
+                  >
                     <span className="group-name">{group}</span>
                     <span style={{ display:'flex', alignItems:'center', gap:8 }}>
                       <span className={`caret${(modelOpenGroups[group] !== false) ? ' open' : ''}`} />
@@ -304,7 +346,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         )}
       </div>
       <div>
-        <div className="section-header" onClick={() => setSectionOpen(s => ({ ...s, tags: !s.tags }))}>
+        <div
+          className="section-header"
+          role="button"
+          tabIndex={0}
+          onClick={() => setSectionOpen(s => ({ ...s, tags: !s.tags }))}
+          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, tags: !s.tags })))}
+        >
           <span className="section-name">标签</span>
           <span style={{ display:'flex', alignItems:'center', gap:8 }}>
             <span className={`caret${sectionOpen.tags ? ' open' : ''}`} />
@@ -322,7 +370,13 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
             <div style={{ display: 'grid', gap: 8 }}>
               {filteredTagsByGroup.map(([group, list]) => (
                 <div key={group}>
-                  <div className="group-header" onClick={() => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}>
+                  <div
+                    className="group-header"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}
+                    onKeyDown={(e) => onToggleKey(e, () => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) })))}
+                  >
                     <span className="group-name">{group}</span>
                     <span style={{ display:'flex', alignItems:'center', gap:8 }}>
                       <span className={`caret${(tagOpenGroups[group] !== false) ? ' open' : ''}`} />

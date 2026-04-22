@@ -16,6 +16,14 @@ type Props = {
 
 export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true, canNext = true, children, footer, leftAside, rightAside }: Props) {
   useEffect(() => {
+    if (!open) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [open])
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
       else if (e.key === 'ArrowLeft' && onPrev) onPrev()
@@ -27,7 +35,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
 
   if (!open) return null
   return createPortal(
-    <div className="lightbox-backdrop blur" onClick={onClose}>
+    <div className="lightbox-backdrop blur" onClick={onClose} role="dialog" aria-modal="true" aria-label="媒体预览">
       <button
         className={`lightbox-nav prev${canPrev ? '' : ' disabled'}`}
         onClick={e => { e.stopPropagation(); if (canPrev && onPrev) onPrev() }}

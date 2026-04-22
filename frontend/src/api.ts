@@ -102,6 +102,16 @@ export async function dislikeMedia(fileId: string): Promise<{ ok: boolean; heat_
   return r.json()
 }
 
+export async function bulkUpdateHeat(fileIds: string[], delta: number): Promise<{ ok: boolean; updated: number; skipped: number; errors: number }> {
+  const r = await fetch(`${API_BASE}/files/bulk/heat`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ file_ids: fileIds, delta })
+  })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
 export async function validatePassword(code: string): Promise<{ ok: boolean }> {
   const base = API_BASE
   const s = q({ code })

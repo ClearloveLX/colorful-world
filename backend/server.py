@@ -315,6 +315,22 @@ def _bulk_apply_tags(file_ids: List[str], tag_ids: List[str], op):
                 errors += 1
     return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
 
+def _bulk_update_heat(file_ids: List[str], delta: int):
+    updated = 0
+    skipped = 0
+    errors = 0
+    for fid in (file_ids or []):
+        try:
+            row = db.get_file_by_id(fid)
+            if not row:
+                skipped += 1
+                continue
+            db.increment_file_heat(fid, delta=delta)
+            updated += 1
+        except Exception:
+            errors += 1
+    return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
+
 @app.get("/api/file")
 def get_file(path: str, request: Request):
     p = _decode_b64_path(path)
@@ -441,6 +457,10 @@ class BulkTagOp(BaseModel):
     file_ids: List[str]
     tag_ids: List[str]
 
+class BulkHeatOp(BaseModel):
+    file_ids: List[str]
+    delta: int
+
 @app.post("/api/files/bulk/add_tags")
 def bulk_add_tags(payload: BulkTagOp):
     return _bulk_apply_tags(payload.file_ids, payload.tag_ids, db.add_file_tag)
@@ -448,6 +468,11 @@ def bulk_add_tags(payload: BulkTagOp):
 @app.post("/api/files/bulk/remove_tags")
 def bulk_remove_tags(payload: BulkTagOp):
     return _bulk_apply_tags(payload.file_ids, payload.tag_ids, db.remove_file_tag)
+
+@app.post("/api/files/bulk/heat")
+def bulk_update_heat(payload: BulkHeatOp):
+    delta = 1 if payload.delta >= 0 else -1
+    return _bulk_update_heat(payload.file_ids, delta)
 if os.path.isdir(FRONTEND_DIST):
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str):
