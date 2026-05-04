@@ -48,8 +48,11 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const dragSelectingRef = useRef<boolean>(false)
   const blockClickRef = useRef<boolean>(false)
   const blockTimerRef = useRef<number | null>(null)
+  const retryTimerRef = useRef<number | null>(null)
+  const retryCountsRef = useRef<Map<string, number>>(new Map())
   const [dragSelecting, setDragSelecting] = useState<boolean>(false)
   const [selectRect, setSelectRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  const [requestRetryTick, setRequestRetryTick] = useState(0)
   useEffect(() => {
     ;(async () => {
       try {
@@ -79,6 +82,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         window.clearTimeout(blockTimerRef.current)
         blockTimerRef.current = null
       }
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
     }
   }, [])
   useEffect(() => {
@@ -93,7 +100,13 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     setItems([])
     setPage(1)
     setHasMore(true)
+    setLoading(false)
     fetchedKeysRef.current.clear()
+    retryCountsRef.current.clear()
+    if (retryTimerRef.current) {
+      window.clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
     initialLoadedRef.current = false
   }
   const triggerRefresh = () => {
@@ -307,7 +320,6 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
       const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
-      fetchedKeysRef.current.add(key)
       setLoading(true)
       const applyPerModelLimit = (arr: MediaItem[], limitPerModel = 2, targetCount = 30): MediaItem[] => {
         const counts = new Map<string, number>()
@@ -342,29 +354,50 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         }
         return chosen
       }
-      const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, exclude_tag_ids: excludeTagIds, page, page_size: 30, strict, min_heat: minHeat, max_heat: maxHeat, order, seed, name: nameSearch })
-      if (filterKeyRef.current !== filterSig) { setLoading(false); return }
-      const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || minHeat !== undefined || maxHeat !== undefined
-      let addedCount = 0
-      setItems(prev => {
-        const seen = new Set(prev.map(i => i.id))
-        const merged = [...prev]
-        const diversified = (order === 'random' && !hasFilters) ? applyPerModelLimit(res.items, 2, 30) : res.items
-        for (const it of diversified) {
-          if (!seen.has(it.id)) {
-            seen.add(it.id)
-            merged.push(it)
-            addedCount += 1
+      try {
+        const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, exclude_tag_ids: excludeTagIds, page, page_size: 30, strict, min_heat: minHeat, max_heat: maxHeat, order, seed, name: nameSearch })
+        if (filterKeyRef.current !== filterSig) return
+        fetchedKeysRef.current.add(key)
+        retryCountsRef.current.delete(key)
+        const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || minHeat !== undefined || maxHeat !== undefined
+        let addedCount = 0
+        setItems(prev => {
+          const seen = new Set(prev.map(i => i.id))
+          const merged = [...prev]
+          const diversified = (order === 'random' && !hasFilters) ? applyPerModelLimit(res.items, 2, 30) : res.items
+          for (const it of diversified) {
+            if (!seen.has(it.id)) {
+              seen.add(it.id)
+              merged.push(it)
+              addedCount += 1
+            }
           }
+          return merged
+        })
+        setHasMore(res.items.length > 0 ? res.hasMore : false)
+        if (page === 1) initialLoadedRef.current = true
+      } catch {
+        if (filterKeyRef.current !== filterSig) return
+        const nextRetryCount = (retryCountsRef.current.get(key) ?? 0) + 1
+        retryCountsRef.current.set(key, nextRetryCount)
+        if (nextRetryCount <= 1) {
+          fetchedKeysRef.current.add(key)
+          if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current)
+          retryTimerRef.current = window.setTimeout(() => {
+            fetchedKeysRef.current.delete(key)
+            setRequestRetryTick(t => t + 1)
+          }, 600)
+        } else {
+          fetchedKeysRef.current.add(key)
         }
-        return merged
-      })
-      setHasMore(res.items.length > 0 ? res.hasMore : false)
-      setLoading(false)
-      if (page === 1) initialLoadedRef.current = true
+      } finally {
+        if (filterKeyRef.current === filterSig) {
+          setLoading(false)
+        }
+      }
     }
     run()
-  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, seed, nameSearch, refreshKey, loading, hasMore])
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, seed, nameSearch, refreshKey, selectMode, requestRetryTick, loading, hasMore])
 
   useEffect(() => {
     const el = sentinel.current
@@ -517,20 +550,18 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           style={{ left: selectRect.left, top: selectRect.top, width: selectRect.width, height: selectRect.height }}
         />
       )}
-      {!loading && items.length === 0 && (<div className="muted" style={{ textAlign:'center', padding:24 }}>暂无内容，试试关闭强关联或减少筛选条件</div>)}
-      {selectMode && (
-        <div className="muted" style={{ textAlign: 'center', paddingBottom: 8 }} aria-live="polite">
-          快捷键：Ctrl/Cmd+A 全选已加载，Esc 清空选择
+      {!loading && items.length === 0 && (
+        <div className="empty-state-panel">
+          <div className="empty-state-title">暂无内容</div>
         </div>
       )}
       <div ref={sentinel} />
       {loading && items.length > 0 && (
-        <div style={{ textAlign:'center', padding:16 }}>
+        <div className="loadmore-panel">
           <div className="spinner" />
-          <div className="muted" style={{ marginTop: 8 }}>正在加载更多…</div>
         </div>
       )}
-      {!hasMore && <div className="muted" style={{ textAlign:'center', padding:16 }}>没有更多了</div>}
+      {!hasMore && <div className="muted end-of-list">没有更多了</div>}
       <Lightbox
         open={selectedIndex !== null && items[selectedIndex] !== undefined}
         onClose={() => setSelectedIndex(null)}

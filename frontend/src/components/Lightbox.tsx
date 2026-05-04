@@ -37,6 +37,14 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
   return createPortal(
     <div className="lightbox-backdrop blur" onClick={onClose} role="dialog" aria-modal="true" aria-label="媒体预览">
       <button
+        className="lightbox-close"
+        onClick={e => { e.stopPropagation(); onClose() }}
+        aria-label="关闭预览"
+        title="关闭"
+      >
+        ×
+      </button>
+      <button
         className={`lightbox-nav prev${canPrev ? '' : ' disabled'}`}
         onClick={e => { e.stopPropagation(); if (canPrev && onPrev) onPrev() }}
         aria-label="上一项"

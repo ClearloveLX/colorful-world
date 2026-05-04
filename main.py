@@ -58,6 +58,11 @@ class ImageClassifierApp:
         # 上一次选择的分类（用于保留选择）
         self.last_selected_model_id = None  # 改为单选，存储单个ID
         self.last_selected_tag_ids = []
+        self.image_preset_var = tk.StringVar(value="")
+        self.image_preset_combo = None
+        self.image_preset_cache = {"items": [], "by_name": {}, "by_id": {}}
+        self.video_preset_cache = {"items": [], "by_name": {}, "by_id": {}}
+        self.video_preset_context = None
         
         # 跟踪打开的对话框，防止同时打开多个
         self.current_dialog = None
@@ -103,6 +108,341 @@ class ImageClassifierApp:
                 except Exception:
                     return None
             return None
+
+    def _get_active_tag_lookup(self):
+        tags = self.db.get_tags_with_category_name(only_active=True)
+        return {tag['id']: tag for tag in tags}
+
+    def _get_selected_tag_ids(self, tag_vars=None):
+        source = tag_vars if tag_vars is not None else self.tag_vars
+        return [tag_id for tag_id, var in source.items() if var.get()]
+
+    def _set_tag_selection(self, tag_ids, tag_vars=None):
+        source = tag_vars if tag_vars is not None else self.tag_vars
+        target_ids = set(tag_ids or [])
+        for tag_id, var in source.items():
+            var.set(tag_id in target_ids)
+
+    def _load_presets(self, media_type):
+        items = self.db.list_presets(media_type)
+        cache = {
+            "items": items,
+            "by_name": {item['name']: item for item in items},
+            "by_id": {item['preset_id']: item for item in items},
+        }
+        if media_type == 'image':
+            self.image_preset_cache = cache
+        else:
+            self.video_preset_cache = cache
+        return cache
+
+    def refresh_image_preset_controls(self):
+        cache = self._load_presets('image')
+        if self.image_preset_combo is not None:
+            names = [''] + [item['name'] for item in cache['items']]
+            self.image_preset_combo['values'] = names
+            if self.image_preset_var.get() not in cache['by_name']:
+                self.image_preset_var.set('')
+
+    def _apply_preset_tags_to_vars(self, media_type, preset, tag_vars=None):
+        available_tags = self._get_active_tag_lookup()
+        preset_tag_ids = preset.get('tags') or []
+        missing = [tag_id for tag_id in preset_tag_ids if tag_id not in available_tags]
+        if missing:
+            raise ValueError(f"预制中存在已失效标签，无法应用：{', '.join(missing)}")
+        self._set_tag_selection(preset_tag_ids, tag_vars=tag_vars)
+        self.last_selected_tag_ids = list(preset_tag_ids)
+
+    def _get_current_preset(self, media_type, preset_name=None, cache=None):
+        name = (preset_name or '').strip()
+        if not name:
+            return None
+        current_cache = cache or (self.image_preset_cache if media_type == 'image' else self.video_preset_cache)
+        preset = current_cache.get('by_name', {}).get(name)
+        if not preset:
+            current_cache = self._load_presets(media_type)
+            preset = current_cache.get('by_name', {}).get(name)
+        if not preset:
+            return None
+        return self.db.get_preset(media_type, preset['preset_id'])
+
+    def _restore_current_preset_tags(self, media_type, preset_name=None, tag_vars=None):
+        preset = self._get_current_preset(media_type, preset_name=preset_name)
+        if not preset:
+            return None
+        self._apply_preset_tags_to_vars(media_type, preset, tag_vars=tag_vars)
+        return preset
+
+    def _overwrite_selected_preset(self, media_type, preset_name, tag_ids, parent=None, tag_vars=None):
+        name = (preset_name or '').strip()
+        if not name:
+            raise ValueError("请先选择一个预制")
+        if not tag_ids:
+            raise ValueError("请先勾选至少一个标签")
+        preset = self._get_current_preset(media_type, preset_name=name)
+        if not preset:
+            raise ValueError("当前预制不存在或已删除")
+        if not messagebox.askyesno(
+            "确认覆盖",
+            f"确定用当前勾选标签覆盖预制“{preset['name']}”吗？",
+            parent=parent,
+        ):
+            return None
+        updated = self.db.update_preset(media_type, preset['preset_id'], tags=tag_ids)
+        if not updated:
+            raise ValueError("覆盖预制失败")
+        self._load_presets(media_type)
+        self._apply_preset_tags_to_vars(media_type, updated, tag_vars=tag_vars)
+        return updated
+
+    def _cycle_preset_selection(self, preset_var, media_type, step, apply_callback, combo=None):
+        cache = self.image_preset_cache if media_type == 'image' else self.video_preset_cache
+        items = cache.get('items') or self._load_presets(media_type).get('items', [])
+        if not items:
+            return False
+        names = [''] + [item['name'] for item in items]
+        current_name = (preset_var.get() or '').strip()
+        if current_name in names:
+            current_index = names.index(current_name)
+            next_index = max(0, min(len(names) - 1, current_index + step))
+        else:
+            next_index = 1 if step >= 0 and len(names) > 1 else 0
+        if current_name == names[next_index]:
+            return False
+        preset_var.set(names[next_index])
+        if combo is not None:
+            try:
+                combo.current(next_index)
+            except Exception:
+                pass
+        apply_callback()
+        return True
+
+    def on_global_preset_mousewheel(self, event):
+        step = -1 if event.delta > 0 else 1
+        try:
+            event_top = event.widget.winfo_toplevel()
+        except Exception:
+            event_top = None
+
+        ctx = self.video_preset_context
+        if ctx:
+            try:
+                if ctx['window'].winfo_exists() and event_top == ctx['window']:
+                    if self._cycle_preset_selection(
+                        ctx['var'],
+                        'video',
+                        step,
+                        ctx['apply'],
+                        combo=ctx['combo'],
+                    ):
+                        return "break"
+                    return "break"
+            except Exception:
+                self.video_preset_context = None
+
+        if event_top == self.root:
+            if self._cycle_preset_selection(
+                self.image_preset_var,
+                'image',
+                step,
+                self.apply_selected_image_preset,
+                combo=self.image_preset_combo,
+            ):
+                return "break"
+            return "break"
+        return None
+
+    def on_image_preset_mousewheel(self, event):
+        if not (event.state & 0x0004):
+            return None
+        return self.on_global_preset_mousewheel(event)
+
+    def apply_selected_image_preset(self, event=None):
+        name = (self.image_preset_var.get() or '').strip()
+        if not name:
+            return
+        cache = self.image_preset_cache or self._load_presets('image')
+        preset = cache['by_name'].get(name)
+        if not preset:
+            messagebox.showerror("错误", "未找到选中的预制")
+            self.refresh_image_preset_controls()
+            return
+        try:
+            full_preset = self.db.get_preset('image', preset['preset_id'])
+            if not full_preset:
+                raise ValueError("预制不存在或已删除")
+            self._apply_preset_tags_to_vars('image', full_preset)
+            self.status_label.config(text=f"已应用图片预制：{full_preset['name']}")
+        except Exception as e:
+            messagebox.showerror("错误", f"应用预制失败：\n{str(e)}")
+            self.refresh_image_preset_controls()
+
+    def save_current_image_preset(self):
+        selected_tag_ids = self._get_selected_tag_ids()
+        if not selected_tag_ids:
+            messagebox.showwarning("警告", "请先勾选至少一个标签")
+            return
+        name = simpledialog.askstring("保存为预制", "请输入预制名称（50字内）:", parent=self.root)
+        if name is None:
+            return
+        try:
+            preset_id = self.db.create_preset('image', name=name, sort_order=len(self.image_preset_cache.get('items', [])), tags=selected_tag_ids)
+            self.refresh_image_preset_controls()
+            preset = self.db.get_preset('image', preset_id)
+            if preset:
+                self.image_preset_var.set(preset['name'])
+            self.status_label.config(text=f"图片预制已保存：{name.strip()}")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存预制失败：\n{str(e)}")
+
+    def overwrite_current_image_preset(self):
+        try:
+            updated = self._overwrite_selected_preset(
+                'image',
+                self.image_preset_var.get(),
+                self._get_selected_tag_ids(),
+                parent=self.root,
+            )
+            if updated:
+                self.refresh_image_preset_controls()
+                self.image_preset_var.set(updated['name'])
+                self.status_label.config(text=f"图片预制已覆盖：{updated['name']}")
+        except Exception as e:
+            messagebox.showerror("错误", f"覆盖预制失败：\n{str(e)}")
+
+    def open_image_preset_manager(self):
+        self.open_preset_manager('image', parent=self.root, on_change=self.refresh_image_preset_controls)
+
+    def open_preset_manager(self, media_type, parent=None, on_change=None):
+        parent_window = parent or self.root
+        title_prefix = "图片" if media_type == 'image' else "视频"
+        win = tk.Toplevel(parent_window)
+        win.title(f"{title_prefix}预制管理")
+        win.geometry("760x520")
+        win.transient(parent_window)
+
+        list_frame = ttk.Frame(win)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        columns = ('name', 'sort_order', 'tags')
+        tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='browse')
+        tree.heading('name', text='名称')
+        tree.heading('sort_order', text='排序')
+        tree.heading('tags', text='标签数')
+        tree.column('name', width=280)
+        tree.column('sort_order', width=80, anchor=tk.CENTER)
+        tree.column('tags', width=80, anchor=tk.CENTER)
+        scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        editor = ttk.LabelFrame(win, text="编辑")
+        editor.pack(fill=tk.X, padx=10, pady=(0, 10))
+        name_var = tk.StringVar()
+        order_var = tk.StringVar()
+        info_var = tk.StringVar(value="请选择一条预制")
+
+        ttk.Label(editor, text="名称").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        name_entry = ttk.Entry(editor, textvariable=name_var, width=32)
+        name_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+        ttk.Label(editor, text="排序").grid(row=0, column=2, padx=5, pady=5, sticky='w')
+        order_entry = ttk.Entry(editor, textvariable=order_var, width=8)
+        order_entry.grid(row=0, column=3, padx=5, pady=5, sticky='w')
+        ttk.Label(editor, textvariable=info_var).grid(row=1, column=0, columnspan=4, padx=5, pady=(0, 5), sticky='w')
+        editor.grid_columnconfigure(1, weight=1)
+
+        state = {"items": [], "selected_id": None}
+
+        def refresh_tree(select_id=None):
+            presets = self.db.list_presets(media_type)
+            state["items"] = presets
+            state["selected_id"] = select_id if select_id else state.get("selected_id")
+            tree.delete(*tree.get_children())
+            for item in presets:
+                tree.insert('', tk.END, iid=item['preset_id'], values=(item['name'], item['sort_order'], len(item.get('tags') or [])))
+            target_id = state["selected_id"]
+            if target_id and tree.exists(target_id):
+                tree.selection_set(target_id)
+                tree.focus(target_id)
+                tree.see(target_id)
+                on_tree_select()
+            else:
+                state["selected_id"] = None
+                name_var.set('')
+                order_var.set('')
+                info_var.set("请选择一条预制")
+            if on_change:
+                on_change()
+
+        def get_selected_preset():
+            preset_id = state.get("selected_id")
+            if not preset_id:
+                return None
+            return self.db.get_preset(media_type, preset_id)
+
+        def on_tree_select(event=None):
+            selection = tree.selection()
+            if not selection:
+                state["selected_id"] = None
+                return
+            preset_id = selection[0]
+            preset = self.db.get_preset(media_type, preset_id)
+            if not preset:
+                refresh_tree()
+                return
+            state["selected_id"] = preset_id
+            name_var.set(preset['name'])
+            order_var.set(str(preset['sort_order']))
+            active_tags = self._get_active_tag_lookup()
+            tag_names = [active_tags[tag_id]['name'] for tag_id in preset.get('tags') or [] if tag_id in active_tags]
+            info_var.set("标签：" + ("、".join(tag_names) if tag_names else "无"))
+
+        def save_changes():
+            preset = get_selected_preset()
+            if not preset:
+                messagebox.showwarning("警告", "请先选择一个预制")
+                return
+            try:
+                new_order = int((order_var.get() or '').strip())
+            except Exception:
+                messagebox.showerror("错误", "排序必须是整数")
+                return
+            try:
+                updated = self.db.update_preset(
+                    media_type,
+                    preset['preset_id'],
+                    name=name_var.get(),
+                    sort_order=new_order,
+                    tags=preset.get('tags') or []
+                )
+                refresh_tree(updated['preset_id'])
+            except Exception as e:
+                messagebox.showerror("错误", f"保存失败：\n{str(e)}")
+
+        def delete_selected():
+            preset = get_selected_preset()
+            if not preset:
+                messagebox.showwarning("警告", "请先选择一个预制")
+                return
+            if not messagebox.askyesno("确认删除", f"确定删除预制“{preset['name']}”吗？", parent=win):
+                return
+            try:
+                self.db.delete_preset(media_type, preset['preset_id'])
+                refresh_tree()
+            except Exception as e:
+                messagebox.showerror("错误", f"删除失败：\n{str(e)}")
+
+        action_frame = ttk.Frame(win)
+        action_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        ttk.Button(action_frame, text="保存修改", command=save_changes).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="删除预制", command=delete_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="刷新", command=lambda: refresh_tree(state.get("selected_id"))).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="关闭", command=win.destroy).pack(side=tk.RIGHT, padx=5)
+
+        tree.bind('<<TreeviewSelect>>', on_tree_select)
+        refresh_tree()
     
     def create_widgets(self):
         # 顶部工具栏
@@ -243,6 +583,20 @@ class ImageClassifierApp:
         # 分类信息选择区域
         classification_frame = ttk.LabelFrame(bottom_section, text="分类信息")
         classification_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        preset_frame = ttk.LabelFrame(classification_frame, text="预制选项")
+        preset_frame.pack(fill=tk.X, expand=False, padx=5, pady=(5, 0))
+        self.image_preset_combo = ttk.Combobox(
+            preset_frame,
+            textvariable=self.image_preset_var,
+            state="readonly",
+            width=28
+        )
+        self.image_preset_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+        self.image_preset_combo.bind("<<ComboboxSelected>>", self.apply_selected_image_preset)
+        ttk.Button(preset_frame, text="保存为预制", command=self.save_current_image_preset).pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(preset_frame, text="覆盖当前预制", command=self.overwrite_current_image_preset).pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(preset_frame, text="管理预制", command=self.open_image_preset_manager).pack(side=tk.LEFT, padx=5, pady=5)
         
         # 模特选择区域
         model_select_frame = ttk.LabelFrame(classification_frame, text="选择模特（单选）")
@@ -375,16 +729,22 @@ class ImageClassifierApp:
         # 状态栏
         self.status_label = ttk.Label(self.root, text="就绪", relief=tk.SUNKEN, anchor=tk.W)
         self.status_label.pack(fill=tk.X, side=tk.BOTTOM)
+        self.refresh_image_preset_controls()
     
     def bind_shortcuts(self):
         """绑定键盘快捷键"""
         self.root.bind('<Key-space>', lambda e: self.load_next())
         self.root.bind('<Key-Left>', lambda e: self.load_previous())
         self.root.bind('<Key-Right>', lambda e: self.load_next())
+        self.root.bind('<Control-a>', lambda e: self.load_previous())
+        self.root.bind('<Control-A>', lambda e: self.load_previous())
+        self.root.bind('<Control-d>', lambda e: self.load_next())
+        self.root.bind('<Control-D>', lambda e: self.load_next())
         self.root.bind('<Key-s>', lambda e: self.save_classification())
         self.root.bind('<Key-S>', lambda e: self.save_classification())
         self.root.bind('<Control-s>', lambda e: self.save_image())
         self.root.bind('<Control-S>', lambda e: self.save_image())
+        self.root.bind_all('<Control-MouseWheel>', self.on_global_preset_mousewheel, add='+')
         # 绑定窗口大小变化事件，确保sash位置保持合理
         self.root.bind('<Configure>', lambda e: self.on_window_configure(e))
         # 确保焦点在窗口上
@@ -939,6 +1299,8 @@ class ImageClassifierApp:
         prev_source_folder = getattr(self.file_manager, 'source_folder', None)
         def on_close():
             self.current_dialog = None
+            if self.video_preset_context and self.video_preset_context.get('window') == vp:
+                self.video_preset_context = None
             vp.destroy()
             self.file_manager.set_source_folder(prev_source_folder)
         vp.protocol("WM_DELETE_WINDOW", on_close)
@@ -1113,6 +1475,13 @@ class ImageClassifierApp:
         right_frame = ttk.LabelFrame(main_frame, text="分类信息")
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5,0))
 
+        preset_frame = ttk.LabelFrame(right_frame, text="预制选项")
+        preset_frame.pack(fill=tk.X, padx=5, pady=5)
+        video_preset_var = tk.StringVar(value="")
+        video_preset_combo = ttk.Combobox(preset_frame, textvariable=video_preset_var, state="readonly", width=28)
+        video_preset_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+        video_preset_state = {"cache": {"items": [], "by_name": {}, "by_id": {}}}
+
         # 模特单选
         model_frame = ttk.LabelFrame(right_frame, text="选择模特（单选）")
         model_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -1209,6 +1578,96 @@ class ImageClassifierApp:
         selected_thumb_index = {'idx': 0}
         gen_state = {"cap": None, "positions": [], "i": 0, "cancel": False, "after_id": None, "busy": False, "q": None, "thread": None, "done": False, "expected": 0, "received": 0}
 
+        def refresh_video_preset_controls():
+            cache = self._load_presets('video')
+            video_preset_state["cache"] = cache
+            names = [''] + [item['name'] for item in cache['items']]
+            video_preset_combo['values'] = names
+            if video_preset_var.get() not in cache['by_name']:
+                video_preset_var.set('')
+
+        def apply_selected_video_preset(event=None):
+            name = (video_preset_var.get() or '').strip()
+            if not name:
+                return
+            cache = video_preset_state["cache"] or self._load_presets('video')
+            preset = cache['by_name'].get(name)
+            if not preset:
+                messagebox.showerror("错误", "未找到选中的视频预制", parent=vp)
+                refresh_video_preset_controls()
+                return
+            try:
+                full_preset = self.db.get_preset('video', preset['preset_id'])
+                if not full_preset:
+                    raise ValueError("预制不存在或已删除")
+                self._apply_preset_tags_to_vars('video', full_preset, tag_vars=tag_vars)
+                gen_label.config(text=f"已应用预制：{full_preset['name']}")
+            except Exception as e:
+                messagebox.showerror("错误", f"应用预制失败：\n{str(e)}", parent=vp)
+                refresh_video_preset_controls()
+
+        def on_video_preset_mousewheel(event):
+            if not (event.state & 0x0004):
+                return None
+            step = -1 if event.delta > 0 else 1
+            self._cycle_preset_selection(
+                video_preset_var,
+                'video',
+                step,
+                lambda: apply_selected_video_preset(),
+                combo=video_preset_combo,
+            )
+            return "break"
+
+        def save_current_video_preset():
+            tag_ids = self._get_selected_tag_ids(tag_vars)
+            if not tag_ids:
+                messagebox.showwarning("警告", "请先勾选至少一个标签", parent=vp)
+                return
+            name = simpledialog.askstring("保存为预制", "请输入视频预制名称（50字内）:", parent=vp)
+            if name is None:
+                return
+            try:
+                preset_id = self.db.create_preset('video', name=name, sort_order=len(video_preset_state["cache"].get('items', [])), tags=tag_ids)
+                refresh_video_preset_controls()
+                preset = self.db.get_preset('video', preset_id)
+                if preset:
+                    video_preset_var.set(preset['name'])
+                gen_label.config(text=f"视频预制已保存：{name.strip()}")
+            except Exception as e:
+                messagebox.showerror("错误", f"保存预制失败：\n{str(e)}", parent=vp)
+
+        def overwrite_current_video_preset():
+            try:
+                updated = self._overwrite_selected_preset(
+                    'video',
+                    video_preset_var.get(),
+                    self._get_selected_tag_ids(tag_vars),
+                    parent=vp,
+                    tag_vars=tag_vars,
+                )
+                if updated:
+                    refresh_video_preset_controls()
+                    video_preset_var.set(updated['name'])
+                    gen_label.config(text=f"视频预制已覆盖：{updated['name']}")
+            except Exception as e:
+                messagebox.showerror("错误", f"覆盖预制失败：\n{str(e)}", parent=vp)
+
+        ttk.Button(preset_frame, text="保存为预制", command=save_current_video_preset).pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(preset_frame, text="覆盖当前预制", command=overwrite_current_video_preset).pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(
+            preset_frame,
+            text="管理预制",
+            command=lambda: self.open_preset_manager('video', parent=vp, on_change=refresh_video_preset_controls)
+        ).pack(side=tk.LEFT, padx=5, pady=5)
+        video_preset_combo.bind('<<ComboboxSelected>>', apply_selected_video_preset)
+        self.video_preset_context = {
+            "window": vp,
+            "var": video_preset_var,
+            "combo": video_preset_combo,
+            "apply": lambda: apply_selected_video_preset(),
+        }
+
         def load_models_tags():
             for w in model_scrollable.winfo_children():
                 w.destroy()
@@ -1218,6 +1677,8 @@ class ImageClassifierApp:
             for m in models:
                 rb = ttk.Radiobutton(model_scrollable, text=m['name'], variable=selected_model, value=m['id'])
                 rb.pack(anchor=tk.W, padx=5, pady=2)
+            if self.last_selected_model_id:
+                selected_model.set(self.last_selected_model_id)
             tags = self.db.get_tags_with_category_name(only_active=False)
             tag_vars.clear()
             groups = {}
@@ -1237,6 +1698,8 @@ class ImageClassifierApp:
                     section.grid_columnconfigure(c, weight=1)
                 for i, t in enumerate(group['tags']):
                     v = tk.BooleanVar()
+                    if t['id'] in self.last_selected_tag_ids:
+                        v.set(True)
                     tag_vars[t['id']] = v
                     cb = ttk.Checkbutton(section, text=t['name'], variable=v)
                     cb.grid(row=i // max_cols, column=i % max_cols, padx=2, pady=1, sticky="w")
@@ -1622,6 +2085,14 @@ class ImageClassifierApp:
                         pass
                     self.db.set_file_models(file_id, [model_id])
                     self.db.set_file_tags(file_id, tag_ids)
+                    self.last_selected_model_id = model_id
+                    current_video_preset = self._restore_current_preset_tags(
+                        'video',
+                        preset_name=video_preset_var.get(),
+                        tag_vars=tag_vars,
+                    )
+                    if not current_video_preset:
+                        self.last_selected_tag_ids = list(tag_ids)
                     def after_success():
                         refresh_video_list()
                         if displayed_videos:
@@ -1656,6 +2127,7 @@ class ImageClassifierApp:
         style = ttk.Style(vp)
         style.configure('Selected.TFrame', bordercolor='blue')
         load_models_tags()
+        refresh_video_preset_controls()
         # 初始化文件夹标签显示
         if getattr(self.file_manager, 'source_folder', None):
             folder_label.config(text=f"源文件夹: {os.path.basename(self.file_manager.source_folder)}")
@@ -1899,9 +2371,10 @@ class ImageClassifierApp:
         self.db.set_file_models(self.current_file_id, [selected_model_id])
         self.db.set_file_tags(self.current_file_id, selected_tag_ids)
         
-        # 更新上一次的选择
+        # 保存后优先恢复当前预制的标签选择
         self.last_selected_model_id = selected_model_id
-        self.last_selected_tag_ids = selected_tag_ids
+        if not self._restore_current_preset_tags('image', preset_name=self.image_preset_var.get()):
+            self.last_selected_tag_ids = selected_tag_ids
         
         # 更新显示
         self.update_image_info()
@@ -2010,9 +2483,10 @@ class ImageClassifierApp:
             self.db.set_file_models(self.current_file_id, selected_model_ids)
             self.db.set_file_tags(self.current_file_id, selected_tag_ids)
             
-            # 更新上一次的选择，以便下次加载新图片时自动带入
+            # 保存后优先恢复当前预制的标签选择，以便下一张继续沿用该预制
             self.last_selected_model_id = selected_model_id
-            self.last_selected_tag_ids = selected_tag_ids
+            if not self._restore_current_preset_tags('image', preset_name=self.image_preset_var.get()):
+                self.last_selected_tag_ids = selected_tag_ids
             
             # 在状态栏显示保存成功信息
             self.status_label.config(text=f"✓ 图片已保存！文件ID: {self.current_file_id} | 保存位置: {new_file_path}")

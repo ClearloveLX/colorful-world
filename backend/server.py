@@ -40,6 +40,17 @@ app.mount("/api/static", StaticFiles(directory=STATIC_BASE), name="static")
 
 db = Database()
 
+def _normalize_media_type(media_type: str) -> str:
+    value = (media_type or '').strip().lower()
+    if value not in {'image', 'video'}:
+        raise HTTPException(status_code=400, detail='media_type 仅支持 image 或 video')
+    return value
+
+def _handle_preset_error(exc: Exception):
+    if isinstance(exc, KeyError):
+        raise HTTPException(status_code=404, detail=str(exc).strip("'"))
+    raise HTTPException(status_code=400, detail=str(exc))
+
 def _to_static_url(p: Optional[str]) -> Optional[str]:
     if not p:
         return None
@@ -116,6 +127,72 @@ def get_models():
 def get_tags():
     tags = db.get_tags_with_category_name(only_active=False)
     return [{"id": t["id"], "name": t["name"], "category_name": t.get("category_name") or None} for t in tags]
+
+class PresetPayload(BaseModel):
+    name: str
+    sort_order: int
+    tags: List[str]
+
+class PresetUpdatePayload(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[int] = None
+    tags: Optional[List[str]] = None
+
+@app.post("/api/presets/{media_type}")
+def create_preset(media_type: str, payload: PresetPayload):
+    media_type = _normalize_media_type(media_type)
+    try:
+        preset_id = db.create_preset(
+            media_type=media_type,
+            name=payload.name,
+            sort_order=payload.sort_order,
+            tags=payload.tags,
+        )
+        return {"preset_id": preset_id}
+    except Exception as exc:
+        _handle_preset_error(exc)
+
+@app.put("/api/presets/{media_type}/{preset_id}")
+def update_preset(media_type: str, preset_id: str, payload: PresetUpdatePayload):
+    media_type = _normalize_media_type(media_type)
+    try:
+        return db.update_preset(
+            media_type=media_type,
+            preset_id=preset_id,
+            name=payload.name,
+            sort_order=payload.sort_order,
+            tags=payload.tags,
+        )
+    except Exception as exc:
+        _handle_preset_error(exc)
+
+@app.delete("/api/presets/{media_type}/{preset_id}")
+def delete_preset(media_type: str, preset_id: str):
+    media_type = _normalize_media_type(media_type)
+    try:
+        db.delete_preset(media_type=media_type, preset_id=preset_id)
+        return {"ok": True}
+    except Exception as exc:
+        _handle_preset_error(exc)
+
+@app.get("/api/presets/{media_type}")
+def list_presets(media_type: str):
+    media_type = _normalize_media_type(media_type)
+    try:
+        return db.list_presets(media_type)
+    except Exception as exc:
+        _handle_preset_error(exc)
+
+@app.get("/api/presets/{media_type}/{preset_id}")
+def get_preset(media_type: str, preset_id: str):
+    media_type = _normalize_media_type(media_type)
+    try:
+        preset = db.get_preset(media_type=media_type, preset_id=preset_id)
+        if not preset:
+            raise KeyError('预制不存在')
+        return preset
+    except Exception as exc:
+        _handle_preset_error(exc)
 
 @app.get("/api/model_types")
 def get_model_types():

@@ -89,7 +89,6 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
       fn()
     }
   }
-
   return (
     <div className="sidebar">
       {(() => {
@@ -98,7 +97,7 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         const total = selectedModels.length + selectedTags.length + excludedTags.length
         if (total === 0) return null
         return (
-          <div style={{ marginBottom: 12 }}>
+          <section className="filter-section-card" style={{ marginBottom: 12 }}>
             <div
               className="section-header"
               role="button"
@@ -190,54 +189,56 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
                 </div>
               </div>
             )}
-          </div>
+          </section>
         )
       })()}
-      <div
-        className="section-header"
-        role="button"
-        tabIndex={0}
-        onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}
-        onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, filter: !s.filter })))}
-      >
-        <span className="section-name">筛选</span>
-        <span className={`caret${sectionOpen.filter ? ' open' : ''}`} />
-      </div>
-      {sectionOpen.filter && (
-        <div style={{ margin: '12px 0' }}>
-          <label className="chip" style={{ display: 'inline-flex', marginBottom: 8 }}>
-            <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, excludedTags, e.target.checked)} />
-            <span>强关联</span>
-          </label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <span className="muted">热度：</span>
-            <input
-              type="number"
-              className="search-input"
-              style={{ width: 60, padding: '4px 8px', margin: 0 }}
-              placeholder="最小"
-              value={minHeat ?? ''}
-              onChange={e => {
-                const val = e.target.value ? parseInt(e.target.value, 10) : undefined
-                onHeatChange && onHeatChange(val, maxHeat)
-              }}
-            />
-            <span className="muted">-</span>
-            <input
-              type="number"
-              className="search-input"
-              style={{ width: 60, padding: '4px 8px', margin: 0 }}
-              placeholder="最大"
-              value={maxHeat ?? ''}
-              onChange={e => {
-                const val = e.target.value ? parseInt(e.target.value, 10) : undefined
-                onHeatChange && onHeatChange(minHeat, val)
-              }}
-            />
-          </div>
+      <section className="filter-section-card">
+        <div
+          className="section-header"
+          role="button"
+          tabIndex={0}
+          onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}
+          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, filter: !s.filter })))}
+        >
+          <span className="section-name">筛选</span>
+          <span className={`caret${sectionOpen.filter ? ' open' : ''}`} />
         </div>
-      )}
-      <div style={{ marginBottom: 12 }}>
+        {sectionOpen.filter && (
+          <div className="filter-section-body" style={{ margin: '12px 0' }}>
+            <label className="chip" style={{ display: 'inline-flex', marginBottom: 8 }}>
+              <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, excludedTags, e.target.checked)} />
+              <span>强关联</span>
+            </label>
+            <div className="filter-heat-row" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <span className="muted">热度：</span>
+              <input
+                type="number"
+                className="search-input"
+                style={{ width: 60, padding: '4px 8px', margin: 0 }}
+                placeholder="最小"
+                value={minHeat ?? ''}
+                onChange={e => {
+                  const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+                  onHeatChange && onHeatChange(val, maxHeat)
+                }}
+              />
+              <span className="muted">-</span>
+              <input
+                type="number"
+                className="search-input"
+                style={{ width: 60, padding: '4px 8px', margin: 0 }}
+                placeholder="最大"
+                value={maxHeat ?? ''}
+                onChange={e => {
+                  const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+                  onHeatChange && onHeatChange(minHeat, val)
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </section>
+      <section className="filter-section-card" style={{ marginBottom: 12 }}>
         <div
           className="section-header"
           role="button"
@@ -252,31 +253,31 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:8 }}>
             <button className={`sort-btn${order==='random' ? ' active' : ''}`} onClick={() => onOrderChange('random')} title="随机排序">随机</button>
             <button className="sort-btn" onClick={() => { onOrderChange('random'); onRandomizeSeed && onRandomizeSeed() }} title="真随机，每次不同">真随机</button>
-            <button 
-              className={`sort-btn${order.startsWith('duration') ? ' active' : ''}`} 
-              onClick={() => onOrderChange(order === 'duration' ? 'duration_asc' : 'duration')} 
+            <button
+              className={`sort-btn${order.startsWith('duration') ? ' active' : ''}`}
+              onClick={() => onOrderChange(order === 'duration' ? 'duration_asc' : 'duration')}
               title={order === 'duration_asc' ? "按时长升序" : "按时长降序"}
             >
               时长{order === 'duration' ? '↓' : (order === 'duration_asc' ? '↑' : '')}
             </button>
-            <button 
-              className={`sort-btn${order.startsWith('recent') ? ' active' : ''}`} 
-              onClick={() => onOrderChange(order === 'recent' ? 'recent_asc' : 'recent')} 
+            <button
+              className={`sort-btn${order.startsWith('recent') ? ' active' : ''}`}
+              onClick={() => onOrderChange(order === 'recent' ? 'recent_asc' : 'recent')}
               title={order === 'recent_asc' ? "按时间升序(旧->新)" : "按时间降序(新->旧)"}
             >
               最新{order === 'recent' ? '↓' : (order === 'recent_asc' ? '↑' : '')}
             </button>
-            <button 
-              className={`sort-btn${order.startsWith('heat') ? ' active' : ''}`} 
-              onClick={() => onOrderChange(order === 'heat' ? 'heat_asc' : 'heat')} 
+            <button
+              className={`sort-btn${order.startsWith('heat') ? ' active' : ''}`}
+              onClick={() => onOrderChange(order === 'heat' ? 'heat_asc' : 'heat')}
               title={order === 'heat_asc' ? "按热度升序(冷->热)" : "按热度降序(热->冷)"}
             >
               热度{order === 'heat' ? '↓' : (order === 'heat_asc' ? '↑' : '')}
             </button>
           </div>
         )}
-      </div>
-      <div style={{ marginBottom: 12 }}>
+      </section>
+      <section className="filter-section-card" style={{ marginBottom: 12 }}>
         <div
           className="section-header"
           role="button"
@@ -290,8 +291,8 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         {sectionOpen.name && (
           <input className="search-input" value={nameSearch} onChange={e => onNameSearchChange(e.target.value)} placeholder="按名称模糊搜索" />
         )}
-      </div>
-      <div style={{ marginBottom: 12 }}>
+      </section>
+      <section className="filter-section-card" style={{ marginBottom: 12 }}>
         <div
           className="section-header"
           role="button"
@@ -344,8 +345,8 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
             </div>
           </>
         )}
-      </div>
-      <div>
+      </section>
+      <section className="filter-section-card">
         <div
           className="section-header"
           role="button"
@@ -405,7 +406,7 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
             </div>
           </>
         )}
-      </div>
+      </section>
     </div>
   )
 }

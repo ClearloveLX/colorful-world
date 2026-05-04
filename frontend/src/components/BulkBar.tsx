@@ -15,9 +15,13 @@ export default function BulkBar({ selectedCount, onAddTags, onRemoveTags, onIncr
   const noSelection = selectedCount <= 0
   return (
     <div className="bulk-bar" role="region" aria-label="批量操作栏">
-      <span className="muted" aria-live="polite">已选：{selectedCount}</span>
-      <button className="tool-btn primary" onClick={onAddTags} disabled={noSelection}>添加标签</button>
-      <button className="tool-btn primary" onClick={onRemoveTags} disabled={noSelection}>移除标签</button>
+      <div className="bulk-summary">
+        <strong className="bulk-summary-value" aria-live="polite">{selectedCount}</strong>
+      </div>
+      <div className="bulk-group">
+        <button className="tool-btn primary bulk-tag-btn bulk-tag-add" onClick={onAddTags} disabled={noSelection}>添加标签</button>
+        <button className="tool-btn primary bulk-tag-btn bulk-tag-remove" onClick={onRemoveTags} disabled={noSelection}>移除标签</button>
+      </div>
       <div className={`heat-group${heatBusy ? ' disabled' : ''}`} aria-label="批量好感度操作">
         <span className="heat-group-label">好感度</span>
         <button
@@ -51,9 +55,11 @@ export default function BulkBar({ selectedCount, onAddTags, onRemoveTags, onIncr
           <span className="heat-chip-text">降低</span>
         </button>
       </div>
-      <button className="tool-btn" onClick={onRefresh}>刷新数据</button>
-      <button className="tool-btn" onClick={onSelectAll}>全选已加载</button>
-      <button className="tool-btn" onClick={onClear} disabled={noSelection}>清空选择</button>
+      <div className="bulk-group">
+        <button className="tool-btn" onClick={onRefresh}>刷新数据</button>
+        <button className="tool-btn" onClick={onSelectAll}>全选已加载</button>
+        <button className="tool-btn" onClick={onClear} disabled={noSelection}>清空选择</button>
+      </div>
       <div style={{ flex:1 }} />
       <button className="tool-btn" onClick={onExit}>退出选择模式</button>
     </div>

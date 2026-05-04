@@ -10,10 +10,22 @@ const q = (params: Record<string, string | number | boolean | undefined>) => {
   return sp.toString()
 }
 
-async function get<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init)
-  if (!r.ok) throw new Error(String(r.status))
-  return r.json()
+async function get<T>(url: string, init?: RequestInit, timeoutMs = 15000): Promise<T> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const onAbort = () => controller.abort()
+  try {
+    if (init?.signal) {
+      if (init.signal.aborted) controller.abort()
+      else init.signal.addEventListener('abort', onAbort, { once: true })
+    }
+    const r = await fetch(url, { ...init, signal: controller.signal })
+    if (!r.ok) throw new Error(String(r.status))
+    return r.json()
+  } finally {
+    clearTimeout(timer)
+    if (init?.signal) init.signal.removeEventListener('abort', onAbort)
+  }
 }
 
 async function getWithFallback<T>(path: string): Promise<T> {
@@ -79,11 +91,7 @@ export async function fetchMedia(params: MediaQuery): Promise<{ items: MediaItem
     seed: params.seed,
     name: (params.name ?? '').trim() || undefined
   })
-  try {
-    return await getRetry<{ items: MediaItem[]; hasMore: boolean }>(`/media?${s}`)
-  } catch {
-    return { items: [], hasMore: false }
-  }
+  return await getRetry<{ items: MediaItem[]; hasMore: boolean }>(`/media?${s}`)
 }
 
 export async function likeMedia(fileId: string): Promise<{ ok: boolean; heat_value: number }> {

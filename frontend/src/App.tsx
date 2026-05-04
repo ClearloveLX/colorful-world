@@ -74,15 +74,6 @@ export default function App() {
       setError('请求失败，请稍后重试')
     }
   }
-  const onFillFromLocal = () => {
-    try {
-      const v = window.localStorage.getItem('cw_access_code') || ''
-      if (v) {
-        setCode(v)
-        try { navigator.clipboard.writeText(v) } catch {}
-      }
-    } catch {}
-  }
   useEffect(() => {
     if (!locked) return
     ;(async () => {
@@ -109,57 +100,63 @@ export default function App() {
               onChange={e => setCode(e.target.value)}
               placeholder="请输入访问密码"
             />
-            <button className="lock-btn" type="submit">进入</button>
-            {error && <div className="lock-error">密码错误</div>}
+            <div className="lock-actions">
+              <button className="lock-btn" type="submit">进入</button>
+            </div>
+            {error && <div className="lock-error">{error}</div>}
           </form>
         </div>
       )}
       {!locked && (
         <>
-          <Filters
-            selectedModels={modelIds}
-            selectedTags={tagIds}
-            excludedTags={excludeTagIds}
-            strict={strict}
-            minHeat={minHeat}
-            maxHeat={maxHeat}
-            order={order}
-            nameSearch={nameSearch}
-            onRandomizeSeed={() => setSeed(Date.now() + Math.floor(Math.random()*1e9))}
-            onChange={(m, t, ex, s) => {
-              setModelIds(m)
-              setTagIds(t)
-              setExcludeTagIds(ex)
-              setStrict(s)
-            }}
-            onHeatChange={(min, max) => {
-              setMinHeat(min)
-              setMaxHeat(max)
-            }}
-            onOrderChange={(o) => setOrder(o)}
-            onNameSearchChange={(q) => setNameSearch(q)}
-          />
-          <MediaGrid
-            modelIds={modelIds}
-            tagIds={tagIds}
-            excludeTagIds={excludeTagIds}
-            strict={strict}
-            minHeat={minHeat}
-            maxHeat={maxHeat}
-            order={order}
-            nameSearch={nameSearch}
-            seed={seed}
-            onTagClick={(id) => {
-          setTagIds(prev => {
-            const s = new Set(prev)
-            s.add(id)
-            return Array.from(s)
-          })
-            }}
-            onModelClick={(id) => {
-              setModelIds([id])
-            }}
-          />
+          <aside className="app-sidebar-shell">
+            <Filters
+              selectedModels={modelIds}
+              selectedTags={tagIds}
+              excludedTags={excludeTagIds}
+              strict={strict}
+              minHeat={minHeat}
+              maxHeat={maxHeat}
+              order={order}
+              nameSearch={nameSearch}
+              onRandomizeSeed={() => setSeed(Date.now() + Math.floor(Math.random()*1e9))}
+              onChange={(m, t, ex, s) => {
+                setModelIds(m)
+                setTagIds(t)
+                setExcludeTagIds(ex)
+                setStrict(s)
+              }}
+              onHeatChange={(min, max) => {
+                setMinHeat(min)
+                setMaxHeat(max)
+              }}
+              onOrderChange={(o) => setOrder(o)}
+              onNameSearchChange={(q) => setNameSearch(q)}
+            />
+          </aside>
+          <main className="app-main-shell">
+            <MediaGrid
+              modelIds={modelIds}
+              tagIds={tagIds}
+              excludeTagIds={excludeTagIds}
+              strict={strict}
+              minHeat={minHeat}
+              maxHeat={maxHeat}
+              order={order}
+              nameSearch={nameSearch}
+              seed={seed}
+              onTagClick={(id) => {
+                setTagIds(prev => {
+                  const s = new Set(prev)
+                  s.add(id)
+                  return Array.from(s)
+                })
+              }}
+              onModelClick={(id) => {
+                setModelIds([id])
+              }}
+            />
+          </main>
           <button
             className={`back-to-top${showTop ? ' show' : ''}`}
             aria-label="回到顶部"
