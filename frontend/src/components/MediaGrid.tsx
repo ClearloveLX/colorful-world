@@ -15,13 +15,15 @@ type Props = {
   minHeat?: number
   maxHeat?: number
   order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'
+  randomMode: 'random' | 'true_random'
+  trueRandomCacheEnabled: boolean
   seed: number
   nameSearch?: string
   onTagClick?: (id: string) => void
   onModelClick?: (id: string) => void
 }
 
-export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, seed, nameSearch = '', onTagClick, onModelClick }: Props) {
+export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', onTagClick, onModelClick }: Props) {
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
@@ -53,6 +55,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [dragSelecting, setDragSelecting] = useState<boolean>(false)
   const [selectRect, setSelectRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [requestRetryTick, setRequestRetryTick] = useState(0)
+  const manualLoadMore = selectMode && order === 'random' && randomMode === 'true_random' && trueRandomCacheEnabled
   useEffect(() => {
     ;(async () => {
       try {
@@ -309,15 +312,15 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     resetToFirstPage()
     setReloadHint(true)
     const sName = nameSearch.trim().toLowerCase()
-    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${seed}|${sName}|${refreshKey}`
+    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
     const t = setTimeout(() => setReloadHint(false), 1200)
     return () => clearTimeout(t)
-  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, nameSearch, seed, refreshKey])
+  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, nameSearch, seed, refreshKey])
 
   useEffect(() => {
     const run = async () => {
       if (!hasMore || loading) return
-      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
+      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
       const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
       setLoading(true)
@@ -355,7 +358,21 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         return chosen
       }
       try {
-        const res = await fetchMedia({ model_ids: modelIds, tag_ids: tagIds, exclude_tag_ids: excludeTagIds, page, page_size: 30, strict, min_heat: minHeat, max_heat: maxHeat, order, seed, name: nameSearch })
+        const res = await fetchMedia({
+          model_ids: modelIds,
+          tag_ids: tagIds,
+          exclude_tag_ids: excludeTagIds,
+          page,
+          page_size: 30,
+          strict,
+          min_heat: minHeat,
+          max_heat: maxHeat,
+          order,
+          seed,
+          name: nameSearch,
+          edit_mode: selectMode,
+          true_random: order === 'random' && randomMode === 'true_random',
+        })
         if (filterKeyRef.current !== filterSig) return
         fetchedKeysRef.current.add(key)
         retryCountsRef.current.delete(key)
@@ -397,9 +414,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       }
     }
     run()
-  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, seed, nameSearch, refreshKey, selectMode, requestRetryTick, loading, hasMore])
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, seed, nameSearch, refreshKey, selectMode, requestRetryTick, loading, hasMore])
 
   useEffect(() => {
+    if (manualLoadMore) return
     const el = sentinel.current
     if (!el) return
     const obs = new IntersectionObserver(entries => {
@@ -411,7 +429,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     })
     obs.observe(el)
     return () => obs.disconnect()
-  }, [sentinel.current, loading, hasMore, items.length])
+  }, [sentinel.current, loading, hasMore, items.length, manualLoadMore])
 
   useEffect(() => {
     if (selectedIndex === null) return
@@ -471,6 +489,9 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       )}
       {reloadHint && (
         <div className="toast"><div className="bubble">{strict ? '强关联已开启，重新加载…' : '强关联已关闭，重新加载…'}</div></div>
+      )}
+      {selectMode && order === 'random' && randomMode === 'true_random' && (
+        <div className="toast"><div className="bubble">{trueRandomCacheEnabled ? '真随机缓存过滤已启用' : '真随机缓存过滤已关闭'}</div></div>
       )}
       <div
         className={`masonry${dragSelecting ? ' selecting' : ''}`}
@@ -559,6 +580,12 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       {loading && items.length > 0 && (
         <div className="loadmore-panel">
           <div className="spinner" />
+        </div>
+      )}
+      {!loading && hasMore && items.length > 0 && manualLoadMore && (
+        <div className="loadmore-panel">
+          <button className="tool-btn primary" onClick={() => setPage(p => p + 1)}>加载下一页</button>
+          <div className="loadmore-text muted">真随机缓存模式下改为手动分页</div>
         </div>
       )}
       {!hasMore && <div className="muted end-of-list">没有更多了</div>}

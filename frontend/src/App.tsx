@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { validatePassword, fetchCurrentPassword } from './api'
+import { validatePassword, fetchCurrentPassword, fetchTrueRandomCacheSettings, updateTrueRandomCacheSettings, clearTrueRandomCache } from './api'
 import Filters from './components/Filters'
 import MediaGrid from './components/MediaGrid'
 
@@ -11,10 +11,16 @@ export default function App() {
   const [minHeat, setMinHeat] = useState<number | undefined>()
   const [maxHeat, setMaxHeat] = useState<number | undefined>()
   const [order, setOrder] = useState<'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'>('random')
+  const [randomMode, setRandomMode] = useState<'random' | 'true_random'>('random')
   const [nameSearch, setNameSearch] = useState<string>('')
   const [locked, setLocked] = useState<boolean>(true)
   const [code, setCode] = useState<string>('')
   const [error, setError] = useState<string>('')
+  const [trueRandomCacheEnabled, setTrueRandomCacheEnabled] = useState(true)
+  const [trueRandomCacheCount, setTrueRandomCacheCount] = useState(0)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const [settingsHint, setSettingsHint] = useState('')
+  const [editMode, setEditMode] = useState(false)
   const seedInit = (() => {
     const d = new Date()
     const y = d.getFullYear()
@@ -25,6 +31,19 @@ export default function App() {
   const [seed, setSeed] = useState<number>(seedInit)
   const [showTop, setShowTop] = useState(false)
   const idleTimerRef = useRef<number | null>(null)
+  const settingsHintTimerRef = useRef<number | null>(null)
+  const loadTrueRandomSettings = async () => {
+    try {
+      const r = await fetchTrueRandomCacheSettings()
+      setTrueRandomCacheEnabled(r.enabled)
+      setTrueRandomCacheCount(r.cached_count)
+    } catch {}
+  }
+  const flashSettingsHint = (text: string) => {
+    setSettingsHint(text)
+    if (settingsHintTimerRef.current) window.clearTimeout(settingsHintTimerRef.current)
+    settingsHintTimerRef.current = window.setTimeout(() => setSettingsHint(''), 1800)
+  }
   useEffect(() => {
     const onScroll = () => {
       setShowTop(window.scrollY > 600)
@@ -61,6 +80,65 @@ export default function App() {
       events.forEach(evt => window.removeEventListener(evt, onActivity))
     }
   }, [locked])
+  useEffect(() => {
+    const applyFromUrl = () => {
+      try {
+        const params = new URLSearchParams(window.location.search)
+        const mode = (params.get('mode') || '').toLowerCase()
+        setEditMode(mode === 'edit')
+      } catch {
+        setEditMode(false)
+      }
+    }
+    applyFromUrl()
+    const onPop = () => applyFromUrl()
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useEffect(() => {
+    if (!editMode) return
+    void loadTrueRandomSettings()
+    const timer = window.setInterval(() => {
+      void loadTrueRandomSettings()
+    }, 15000)
+    const onFocus = () => { void loadTrueRandomSettings() }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+      if (settingsHintTimerRef.current) {
+        window.clearTimeout(settingsHintTimerRef.current)
+        settingsHintTimerRef.current = null
+      }
+    }
+  }, [editMode])
+  const onToggleTrueRandomCache = async (enabled: boolean) => {
+    if (settingsBusy) return
+    setSettingsBusy(true)
+    try {
+      const r = await updateTrueRandomCacheSettings(enabled)
+      setTrueRandomCacheEnabled(r.enabled)
+      setTrueRandomCacheCount(r.cached_count)
+      flashSettingsHint(r.enabled ? '真随机缓存已开启' : '真随机缓存已关闭')
+    } catch {
+      flashSettingsHint('设置保存失败')
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+  const onClearTrueRandomCache = async () => {
+    if (settingsBusy) return
+    setSettingsBusy(true)
+    try {
+      const r = await clearTrueRandomCache()
+      setTrueRandomCacheCount(r.cached_count)
+      flashSettingsHint(`已清理 ${r.deleted} 条随机缓存`)
+    } catch {
+      flashSettingsHint('清理缓存失败')
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
   const onSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     setError('')
@@ -118,8 +196,11 @@ export default function App() {
               minHeat={minHeat}
               maxHeat={maxHeat}
               order={order}
+              editMode={editMode}
+              randomMode={randomMode}
               nameSearch={nameSearch}
               onRandomizeSeed={() => setSeed(Date.now() + Math.floor(Math.random()*1e9))}
+              onRandomModeChange={(mode) => setRandomMode(mode)}
               onChange={(m, t, ex, s) => {
                 setModelIds(m)
                 setTagIds(t)
@@ -132,6 +213,12 @@ export default function App() {
               }}
               onOrderChange={(o) => setOrder(o)}
               onNameSearchChange={(q) => setNameSearch(q)}
+              trueRandomCacheEnabled={trueRandomCacheEnabled}
+              trueRandomCacheCount={trueRandomCacheCount}
+              settingsBusy={settingsBusy}
+              settingsHint={settingsHint}
+              onToggleTrueRandomCache={onToggleTrueRandomCache}
+              onClearTrueRandomCache={onClearTrueRandomCache}
             />
           </aside>
           <main className="app-main-shell">
@@ -143,6 +230,9 @@ export default function App() {
               minHeat={minHeat}
               maxHeat={maxHeat}
               order={order}
+              randomMode={randomMode}
+              trueRandomCacheEnabled={trueRandomCacheEnabled}
+              editMode={editMode}
               nameSearch={nameSearch}
               seed={seed}
               onTagClick={(id) => {

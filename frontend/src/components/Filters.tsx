@@ -10,15 +10,47 @@ type Props = {
   minHeat?: number
   maxHeat?: number
   order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'
+  editMode: boolean
+  randomMode: 'random' | 'true_random'
   onChange: (models: string[], tags: string[], excludedTags: string[], strict: boolean) => void
   onHeatChange?: (min?: number, max?: number) => void
   onOrderChange: (order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc') => void
   nameSearch: string
   onNameSearchChange: (q: string) => void
   onRandomizeSeed?: () => void
+  onRandomModeChange: (mode: 'random' | 'true_random') => void
+  trueRandomCacheEnabled: boolean
+  trueRandomCacheCount: number
+  settingsBusy: boolean
+  settingsHint: string
+  onToggleTrueRandomCache: (enabled: boolean) => void
+  onClearTrueRandomCache: () => void
 }
 
-export default function Filters({ selectedModels, selectedTags, excludedTags, strict, minHeat, maxHeat, order, onChange, onHeatChange, onOrderChange, nameSearch, onNameSearchChange, onRandomizeSeed }: Props) {
+export default function Filters({
+  selectedModels,
+  selectedTags,
+  excludedTags,
+  strict,
+  minHeat,
+  maxHeat,
+  order,
+  editMode,
+  randomMode,
+  onChange,
+  onHeatChange,
+  onOrderChange,
+  nameSearch,
+  onNameSearchChange,
+  onRandomizeSeed,
+  onRandomModeChange,
+  trueRandomCacheEnabled,
+  trueRandomCacheCount,
+  settingsBusy,
+  settingsHint,
+  onToggleTrueRandomCache,
+  onClearTrueRandomCache,
+}: Props) {
   const [models, setModels] = useState<Model[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [modelSearch, setModelSearch] = useState('')
@@ -26,7 +58,7 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
   const [tagMode, setTagMode] = useState<'include' | 'exclude'>('include')
   const [modelOpenGroups, setModelOpenGroups] = useState<Record<string, boolean>>({})
   const [tagOpenGroups, setTagOpenGroups] = useState<Record<string, boolean>>({})
-  const [sectionOpen, setSectionOpen] = useState<{ filter: boolean; order: boolean; name: boolean; selected: boolean; models: boolean; tags: boolean }>({ filter: true, order: true, name: true, selected: true, models: true, tags: true })
+  const [sectionOpen, setSectionOpen] = useState<{ filter: boolean; order: boolean; system: boolean; name: boolean; selected: boolean; models: boolean; tags: boolean }>({ filter: true, order: true, system: true, name: true, selected: true, models: true, tags: true })
 
   useEffect(() => {
     fetchModels().then(setModels)
@@ -251,8 +283,20 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
         </div>
         {sectionOpen.order && (
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:8 }}>
-            <button className={`sort-btn${order==='random' ? ' active' : ''}`} onClick={() => onOrderChange('random')} title="随机排序">随机</button>
-            <button className="sort-btn" onClick={() => { onOrderChange('random'); onRandomizeSeed && onRandomizeSeed() }} title="真随机，每次不同">真随机</button>
+            <button
+              className={`sort-btn${order==='random' && randomMode==='random' ? ' active' : ''}`}
+              onClick={() => { onRandomModeChange('random'); onOrderChange('random') }}
+              title="随机排序"
+            >
+              随机
+            </button>
+            <button
+              className={`sort-btn${order==='random' && randomMode==='true_random' ? ' active' : ''}`}
+              onClick={() => { onRandomModeChange('true_random'); onOrderChange('random'); onRandomizeSeed && onRandomizeSeed() }}
+              title="真随机，每次不同"
+            >
+              真随机
+            </button>
             <button
               className={`sort-btn${order.startsWith('duration') ? ' active' : ''}`}
               onClick={() => onOrderChange(order === 'duration' ? 'duration_asc' : 'duration')}
@@ -277,6 +321,52 @@ export default function Filters({ selectedModels, selectedTags, excludedTags, st
           </div>
         )}
       </section>
+      {editMode && (
+        <section className="filter-section-card" style={{ marginBottom: 12 }}>
+          <div
+            className="section-header"
+            role="button"
+            tabIndex={0}
+            onClick={() => setSectionOpen(s => ({ ...s, system: !s.system }))}
+            onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, system: !s.system })))}
+          >
+            <span className="section-name">系统设置</span>
+            <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span className={`caret${sectionOpen.system ? ' open' : ''}`} />
+              <span className="badge-count">{trueRandomCacheCount}</span>
+            </span>
+          </div>
+          {sectionOpen.system && (
+            <div className="system-settings-panel">
+              <div className="system-setting-row">
+                <div>
+                  <div className="system-setting-title">真随机缓存</div>
+                  <div className="muted">仅编辑模式下的真随机会自动排除历史缓存数据</div>
+                </div>
+                <label className={`switch${trueRandomCacheEnabled ? ' on' : ''}${settingsBusy ? ' disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={trueRandomCacheEnabled}
+                    disabled={settingsBusy}
+                    onChange={e => onToggleTrueRandomCache(e.target.checked)}
+                  />
+                  <span className="switch-track"><span className="switch-thumb" /></span>
+                </label>
+              </div>
+              <div className="system-setting-meta">
+                <span className={`cache-state-pill${trueRandomCacheEnabled ? ' active' : ''}`}>
+                  {trueRandomCacheEnabled ? '缓存过滤已启用' : '缓存过滤已停用'}
+                </span>
+                <span className="cache-state-pill">已缓存 {trueRandomCacheCount} 条</span>
+              </div>
+              <div className="system-setting-actions">
+                <button className="tool-btn" disabled={settingsBusy} onClick={onClearTrueRandomCache}>清理全部缓存</button>
+                {settingsHint && <span className="system-setting-hint">{settingsHint}</span>}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
       <section className="filter-section-card" style={{ marginBottom: 12 }}>
         <div
           className="section-header"

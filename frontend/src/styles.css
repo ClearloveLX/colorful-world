@@ -159,6 +159,21 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Hel
 .sort-btn{font-size:12px;line-height:1;padding:6px 10px;border-radius:12px;border:1px solid var(--border);background:#fff;color:var(--text);cursor:pointer;transition:.16s}
 .sort-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(15,23,42,.12);background:#eff6ff}
 .sort-btn.active{border-color:var(--primary);background:#eff6ff}
+.system-settings-panel{display:grid;gap:10px;margin-top:8px}
+.system-setting-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:#f8fbff}
+.system-setting-title{font-size:13px;font-weight:700;color:var(--text)}
+.system-setting-meta{display:flex;gap:8px;flex-wrap:wrap}
+.cache-state-pill{display:inline-flex;align-items:center;padding:3px 8px;border:1px solid #dbe4f3;border-radius:999px;background:#fff;font-size:12px;color:var(--muted)}
+.cache-state-pill.active{background:#ecfdf3;border-color:#a7f3d0;color:#166534}
+.system-setting-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.system-setting-hint{font-size:12px;color:#2563eb}
+.switch{display:inline-flex;align-items:center;cursor:pointer}
+.switch.disabled{opacity:.6;cursor:not-allowed}
+.switch input{position:absolute;opacity:0;pointer-events:none}
+.switch-track{position:relative;display:inline-flex;align-items:center;width:44px;height:24px;border-radius:999px;background:#dbe4f3;transition:background .16s ease}
+.switch-thumb{position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(15,23,42,.2);transition:transform .16s ease}
+.switch.on .switch-track{background:#22c55e}
+.switch.on .switch-thumb{transform:translateX(20px)}
 .spinner{width:28px;height:28px;border-radius:50%;border:3px solid #e6efff;border-top-color:#3b82f6;animation:spin .8s linear infinite;display:inline-block}
 .back-to-top{position:fixed;right:22px;bottom:22px;width:56px;height:56px;border-radius:50%;border:none;background:linear-gradient(180deg,#3b82f6,#2563eb);color:#fff;box-shadow:0 14px 28px rgba(59,130,246,.45),0 4px 12px rgba(15,23,42,.18);cursor:pointer;display:grid;place-items:center;font-size:18px;opacity:0;transform:translateY(10px) scale(.96);transition:opacity .18s ease, transform .18s ease, box-shadow .18s ease;z-index:99}
 .back-to-top:hover{transform:translateY(0) scale(1.04);box-shadow:0 18px 36px rgba(59,130,246,.55),0 6px 16px rgba(15,23,42,.22)}

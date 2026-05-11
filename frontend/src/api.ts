@@ -75,9 +75,29 @@ export type MediaQuery = {
   order?: 'recent' | 'recent_asc' | 'random' | 'duration' | 'duration_asc' | 'heat' | 'heat_asc'
   seed?: number
   name?: string
+  edit_mode?: boolean
+  true_random?: boolean
 }
 
-export async function fetchMedia(params: MediaQuery): Promise<{ items: MediaItem[]; hasMore: boolean }> {
+export type TrueRandomCacheMeta = {
+  enabled: boolean
+  active: boolean
+  cached_count: number
+}
+
+export type MediaResponse = {
+  items: MediaItem[]
+  hasMore: boolean
+  true_random_cache?: TrueRandomCacheMeta
+}
+
+export type TrueRandomCacheSettings = {
+  enabled: boolean
+  cached_count: number
+  source: string
+}
+
+export async function fetchMedia(params: MediaQuery): Promise<MediaResponse> {
   const s = q({
     model_ids: params.model_ids?.join(',') || undefined,
     tag_ids: params.tag_ids?.join(',') || undefined,
@@ -89,9 +109,11 @@ export async function fetchMedia(params: MediaQuery): Promise<{ items: MediaItem
     max_heat: params.max_heat,
     order: params.order,
     seed: params.seed,
-    name: (params.name ?? '').trim() || undefined
+    name: (params.name ?? '').trim() || undefined,
+    edit_mode: params.edit_mode,
+    true_random: params.true_random,
   })
-  return await getRetry<{ items: MediaItem[]; hasMore: boolean }>(`/media?${s}`)
+  return await getRetry<MediaResponse>(`/media?${s}`)
 }
 
 export async function likeMedia(fileId: string): Promise<{ ok: boolean; heat_value: number }> {
@@ -146,6 +168,26 @@ export async function bulkRemoveTags(fileIds: string[], tagIds: string[]): Promi
     headers: { 'Content-Type':'application/json' },
     body: JSON.stringify({ file_ids: fileIds, tag_ids: tagIds })
   })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+export async function fetchTrueRandomCacheSettings(): Promise<TrueRandomCacheSettings> {
+  return await getRetry<TrueRandomCacheSettings>('/settings/true-random-cache')
+}
+
+export async function updateTrueRandomCacheSettings(enabled: boolean): Promise<TrueRandomCacheSettings & { ok: boolean }> {
+  const r = await fetch(`${API_BASE}/settings/true-random-cache`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+export async function clearTrueRandomCache(): Promise<{ ok: boolean; deleted: number; cached_count: number }> {
+  const r = await fetch(`${API_BASE}/true-random-cache/clear`, { method: 'POST' })
   if (!r.ok) throw new Error(String(r.status))
   return r.json()
 }

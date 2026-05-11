@@ -5,6 +5,8 @@ from fastapi.responses import FileResponse
 from typing import Optional
 import os
 import base64
+import hashlib
+import json
 from fastapi import HTTPException
 import sys
 import subprocess
@@ -50,6 +52,19 @@ def _handle_preset_error(exc: Exception):
     if isinstance(exc, KeyError):
         raise HTTPException(status_code=404, detail=str(exc).strip("'"))
     raise HTTPException(status_code=400, detail=str(exc))
+
+def _build_true_random_cache_key(model_ids, tag_ids, exclude_tag_ids, strict, min_heat, max_heat, name):
+    payload = {
+        "model_ids": sorted([str(v) for v in (model_ids or []) if str(v).strip()]),
+        "tag_ids": sorted([str(v) for v in (tag_ids or []) if str(v).strip()]),
+        "exclude_tag_ids": sorted([str(v) for v in (exclude_tag_ids or []) if str(v).strip()]),
+        "strict": bool(strict),
+        "min_heat": min_heat,
+        "max_heat": max_heat,
+        "name": (name or '').strip().lower(),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.md5(raw.encode('utf-8')).hexdigest()
 
 def _to_static_url(p: Optional[str]) -> Optional[str]:
     if not p:
@@ -138,6 +153,16 @@ class PresetUpdatePayload(BaseModel):
     sort_order: Optional[int] = None
     tags: Optional[List[str]] = None
 
+class TrueRandomCacheSettingsPayload(BaseModel):
+    enabled: bool
+
+def _true_random_cache_settings_response():
+    return {
+        "enabled": db.get_true_random_cache_enabled(),
+        "cached_count": db.count_true_random_cache(),
+        "source": "database",
+    }
+
 @app.post("/api/presets/{media_type}")
 def create_preset(media_type: str, payload: PresetPayload):
     media_type = _normalize_media_type(media_type)
@@ -199,6 +224,25 @@ def get_model_types():
     rows = db.get_all_model_types()
     return [{"id": r["id"], "name": r["name"], "is_active": r.get("is_active", 1), "description": r.get("description") or None} for r in rows]
 
+@app.get("/api/settings/true-random-cache")
+def get_true_random_cache_settings():
+    return _true_random_cache_settings_response()
+
+@app.put("/api/settings/true-random-cache")
+def update_true_random_cache_settings(payload: TrueRandomCacheSettingsPayload):
+    enabled = db.set_true_random_cache_enabled(payload.enabled)
+    return {
+        "ok": True,
+        "enabled": enabled,
+        "cached_count": db.count_true_random_cache(),
+        "source": "database",
+    }
+
+@app.post("/api/true-random-cache/clear")
+def clear_true_random_cache():
+    deleted = db.clear_true_random_cache()
+    return {"ok": True, "deleted": deleted, "cached_count": 0}
+
 @app.get("/api/media")
 def get_media(
     model_ids: Optional[str] = Query(default=None),
@@ -212,13 +256,44 @@ def get_media(
     order: Optional[str] = Query(default=None),
     seed: Optional[int] = Query(default=None),
     name: Optional[str] = Query(default=None),
+    edit_mode: bool = False,
+    true_random: bool = False,
 ):
     try:
         mset = [s for s in (model_ids or '').split(',') if s]
         tset = [s for s in (tag_ids or '').split(',') if s]
         exset = [s for s in (exclude_tag_ids or '').split(',') if s]
-        offset = max((page - 1) * page_size, 0)
-        rows = db.query_files_with_filters(model_ids=mset or None, tag_ids=tset or None, exclude_tag_ids=exset or None, strict=strict, min_heat=min_heat, max_heat=max_heat, offset=offset, limit=page_size, order=(order or 'recent'), seed=seed, name=name)
+        effective_order = order or 'recent'
+        cache_enabled = db.get_true_random_cache_enabled()
+        use_true_random_cache = bool(edit_mode and true_random and effective_order == 'random' and cache_enabled)
+        blacklist_cache_key = None
+        if use_true_random_cache:
+            blacklist_cache_key = _build_true_random_cache_key(
+                model_ids=mset,
+                tag_ids=tset,
+                exclude_tag_ids=exset,
+                strict=strict,
+                min_heat=min_heat,
+                max_heat=max_heat,
+                name=name,
+            )
+        offset = 0 if use_true_random_cache else max((page - 1) * page_size, 0)
+        rows = db.query_files_with_filters(
+            model_ids=mset or None,
+            tag_ids=tset or None,
+            exclude_tag_ids=exset or None,
+            strict=strict,
+            min_heat=min_heat,
+            max_heat=max_heat,
+            offset=offset,
+            limit=page_size,
+            order=effective_order,
+            seed=seed,
+            name=name,
+            blacklist_cache_key=blacklist_cache_key,
+        )
+        if use_true_random_cache and rows:
+            db.cache_true_random_results(blacklist_cache_key, [row.get('id') for row in rows if row.get('id')])
         slice_items = []
         tag_rows = db.get_tags_with_category_name(only_active=False)
         tag_meta = { r['id']: {
@@ -296,7 +371,15 @@ def get_media(
                 "created_at": f.get("created_at"),
             })
         has_more = len(rows) == page_size
-        return {"items": result, "hasMore": has_more}
+        return {
+            "items": result,
+            "hasMore": has_more,
+            "true_random_cache": {
+                "enabled": cache_enabled,
+                "active": use_true_random_cache,
+                "cached_count": db.count_true_random_cache() if use_true_random_cache else db.count_true_random_cache(),
+            },
+        }
     except Exception as e:
         print("get_media error", str(e))
         raise HTTPException(status_code=500, detail=str(e))
