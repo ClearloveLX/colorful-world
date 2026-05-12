@@ -97,7 +97,7 @@ export type TrueRandomCacheSettings = {
   source: string
 }
 
-export async function fetchMedia(params: MediaQuery): Promise<MediaResponse> {
+export async function fetchMedia(params: MediaQuery, signal?: AbortSignal): Promise<MediaResponse> {
   const s = q({
     model_ids: params.model_ids?.join(',') || undefined,
     tag_ids: params.tag_ids?.join(',') || undefined,
@@ -113,7 +113,23 @@ export async function fetchMedia(params: MediaQuery): Promise<MediaResponse> {
     edit_mode: params.edit_mode,
     true_random: params.true_random,
   })
-  return await getRetry<MediaResponse>(`/media?${s}`)
+  const base = API_BASE
+  const url = `${base}/media?${s}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15000)
+  const onExternalAbort = () => controller.abort()
+  try {
+    if (signal) {
+      if (signal.aborted) controller.abort()
+      else signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+    const r = await fetch(url, { signal: controller.signal })
+    if (!r.ok) throw new Error(String(r.status))
+    return r.json()
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', onExternalAbort)
+  }
 }
 
 export async function likeMedia(fileId: string): Promise<{ ok: boolean; heat_value: number }> {

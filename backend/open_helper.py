@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
                     pass
                 if not ok:
                     try:
-                        subprocess.Popen(f'start "" "{p}"', shell=True)
+                        subprocess.Popen(['cmd', '/c', 'start', '', p])
                         ok = True
                     except Exception:
                         pass

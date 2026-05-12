@@ -31,7 +31,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
     }
     if (open) document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  }, [open, onClose, onPrev, onNext])
 
   if (!open) return null
   return createPortal(

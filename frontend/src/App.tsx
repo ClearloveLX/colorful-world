@@ -21,14 +21,13 @@ export default function App() {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsHint, setSettingsHint] = useState('')
   const [editMode, setEditMode] = useState(false)
-  const seedInit = (() => {
+  const [seed, setSeed] = useState<number>(() => {
     const d = new Date()
     const y = d.getFullYear()
     const m = d.getMonth() + 1
     const day = d.getDate()
     return y * 10000 + m * 100 + day
-  })()
-  const [seed, setSeed] = useState<number>(seedInit)
+  })
   const [showTop, setShowTop] = useState(false)
   const idleTimerRef = useRef<number | null>(null)
   const settingsHintTimerRef = useRef<number | null>(null)
@@ -164,6 +163,7 @@ export default function App() {
       } catch {}
     })()
   }, [locked])
+
   return (
     <div className={`app-layout${locked ? ' bg-anim' : ''}`}>
       {locked && (
@@ -232,7 +232,6 @@ export default function App() {
               order={order}
               randomMode={randomMode}
               trueRandomCacheEnabled={trueRandomCacheEnabled}
-              editMode={editMode}
               nameSearch={nameSearch}
               seed={seed}
               onTagClick={(id) => {

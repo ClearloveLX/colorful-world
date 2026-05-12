@@ -28,6 +28,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(false)
+  const loadingRef = useRef(loading)
+  loadingRef.current = loading
+  const hasMoreRef = useRef(hasMore)
+  hasMoreRef.current = hasMore
   const [vMeta, setVMeta] = useState<{ w: number; h: number; d: number | null } | null>(null)
   const [vSize, setVSize] = useState<number | null>(null)
   const sentinel = useRef<HTMLDivElement | null>(null)
@@ -52,6 +56,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const blockTimerRef = useRef<number | null>(null)
   const retryTimerRef = useRef<number | null>(null)
   const retryCountsRef = useRef<Map<string, number>>(new Map())
+  const abortControllerRef = useRef<AbortController | null>(null)
   const [dragSelecting, setDragSelecting] = useState<boolean>(false)
   const [selectRect, setSelectRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [requestRetryTick, setRequestRetryTick] = useState(0)
@@ -319,10 +324,13 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
 
   useEffect(() => {
     const run = async () => {
-      if (!hasMore || loading) return
+      if (!hasMoreRef.current || loadingRef.current) return
       const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
       const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
+      const controller = new AbortController()
+      abortControllerRef.current?.abort()
+      abortControllerRef.current = controller
       setLoading(true)
       const applyPerModelLimit = (arr: MediaItem[], limitPerModel = 2, targetCount = 30): MediaItem[] => {
         const counts = new Map<string, number>()
@@ -372,12 +380,11 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           name: nameSearch,
           edit_mode: selectMode,
           true_random: order === 'random' && randomMode === 'true_random',
-        })
+        }, controller.signal)
         if (filterKeyRef.current !== filterSig) return
         fetchedKeysRef.current.add(key)
         retryCountsRef.current.delete(key)
         const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || minHeat !== undefined || maxHeat !== undefined
-        let addedCount = 0
         setItems(prev => {
           const seen = new Set(prev.map(i => i.id))
           const merged = [...prev]
@@ -386,7 +393,6 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
             if (!seen.has(it.id)) {
               seen.add(it.id)
               merged.push(it)
-              addedCount += 1
             }
           }
           return merged
@@ -414,7 +420,14 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       }
     }
     run()
-  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, seed, nameSearch, refreshKey, selectMode, requestRetryTick, loading, hasMore])
+    return () => {
+      abortControllerRef.current?.abort()
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+    }
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, seed, nameSearch, refreshKey, selectMode, requestRetryTick])
 
   useEffect(() => {
     if (manualLoadMore) return
@@ -422,14 +435,14 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     if (!el) return
     const obs = new IntersectionObserver(entries => {
       entries.forEach(e => {
-        if (e.isIntersecting && !loading && hasMore && initialLoadedRef.current && items.length > 0) {
+        if (e.isIntersecting && !loadingRef.current && hasMoreRef.current && initialLoadedRef.current) {
           setPage(p => p + 1)
         }
       })
     })
     obs.observe(el)
     return () => obs.disconnect()
-  }, [sentinel.current, loading, hasMore, items.length, manualLoadMore])
+  }, [sentinel.current, manualLoadMore])
 
   useEffect(() => {
     if (selectedIndex === null) return

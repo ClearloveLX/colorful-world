@@ -13,6 +13,8 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
   const ref = useRef<HTMLVideoElement | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [playing, setPlaying] = useState<boolean>(false)
+  const playingRef = useRef(playing)
+  playingRef.current = playing
   const [muted, setMuted] = useState<boolean>(false)
   const [vol, setVol] = useState<number>(initialVolume)
   const [cur, setCur] = useState<number>(0)
@@ -164,12 +166,12 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
       const el = ref.current
       if (!el) return
       const rs = el.readyState
-      if (playing && rs < 3) {
+      if (playingRef.current && rs < 3) {
         retryPlayback()
       }
     }, 3000)
     return () => window.clearInterval(id)
-  }, [playing, src])
+  }, [src])
 
   const fmt = (s: number) => {
     const m = Math.floor(s / 60)
@@ -230,6 +232,7 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
         ref={ref}
         src={srcUrl}
         controls={false}
+        aria-label="视频播放器"
         onLoadedMetadata={onMeta}
         onTimeUpdate={onTime}
         onError={retryPlayback}
@@ -245,11 +248,11 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
         <button className="video-btn" onClick={togglePlay}>{playing ? '暂停' : '播放'}</button>
         <button className="video-btn" onClick={toggleFs}>{fs ? '退出全屏' : '全屏'}</button>
         <span className="muted">{fmt(cur)} / {fmt(dur)}</span>
-        <input className="video-range" type="range" min={0} max={dur || 0} step={0.1} value={Math.min(cur, dur || 0)} onChange={onSeek} style={{ flex:1 }} />
+        <input className="video-range" type="range" min={0} max={dur || 0} step={0.1} value={Math.min(cur, dur || 0)} onChange={onSeek} style={{ flex:1 }} aria-label="播放进度" />
       </div>
       <div className="video-controls-row">
         <button className="video-btn" onClick={() => setMuted(m => !m)}>{muted ? '取消静音' : '静音'}</button>
-        <input className="video-range" type="range" min={0} max={1} step={0.01} value={muted ? 0 : vol} onChange={e => setVol(Number(e.target.value))} style={{ width:160 }} />
+        <input className="video-range" type="range" min={0} max={1} step={0.01} value={muted ? 0 : vol} onChange={e => setVol(Number(e.target.value))} style={{ width:160 }} aria-label="音量" />
         <div ref={rateWrapRef} style={{ position:'relative' }}>
           <button
             className="video-btn"

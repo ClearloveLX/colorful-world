@@ -9,10 +9,11 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(item.file_type.toLowerCase())
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
-  const [tilt, setTilt] = useState<string>('')
+  const tiltFrameRef = useRef<number | null>(null)
   const [ripple, setRipple] = useState<{x:number;y:number;key:number}|null>(null)
   const [imgLoaded, setImgLoaded] = useState(false)
   const [inView, setInView] = useState(false)
+  const beamRef = useRef<HTMLDivElement | null>(null)
   const [imgSrc, setImgSrc] = useState<string>(cover)
   const [triedFallback, setTriedFallback] = useState<boolean>(false)
   const [imgFailed, setImgFailed] = useState<boolean>(false)
@@ -22,6 +23,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   const [heat, setHeat] = useState<number>(Number(item.heat_value ?? 0))
   const [liking, setLiking] = useState<boolean>(false)
   const [disliking, setDisliking] = useState<boolean>(false)
+  const mutationInFlightRef = useRef<boolean>(false)
   const lastClickRef = useRef<number>(0)
   const lastClickDownRef = useRef<number>(0)
   const [flyKey, setFlyKey] = useState<number | null>(null)
@@ -59,16 +61,30 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   const onMove = (e: React.MouseEvent) => {
     const el = cardRef.current
     if (!el) return
-    const r = el.getBoundingClientRect()
-    const x = e.clientX - r.left
-    const y = e.clientY - r.top
-    const rx = ((y / r.height) - 0.5) * -6
-    const ry = ((x / r.width) - 0.5) * 6
-    setTilt(`perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(0)`) 
-    const tx = Math.max(0, Math.min(r.width, x)) - r.width * 0.2
-    setBeam(`translate(${tx}px, -10%) rotate(-12deg)`) 
+    if (tiltFrameRef.current) return
+    tiltFrameRef.current = requestAnimationFrame(() => {
+      tiltFrameRef.current = null
+      const r = el.getBoundingClientRect()
+      const x = e.clientX - r.left
+      const y = e.clientY - r.top
+      const rx = ((y / r.height) - 0.5) * -6
+      const ry = ((x / r.width) - 0.5) * 6
+      el.style.transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(0)`
+      const beam = beamRef.current
+      if (beam) {
+        const tx = Math.max(0, Math.min(r.width, x)) - r.width * 0.2
+        beam.style.transform = `translate(${tx}px, -10%) rotate(-12deg)`
+      }
+    })
   }
-  const onLeave = () => { setTilt(''); setBeam('') }
+  const onLeave = () => {
+    if (tiltFrameRef.current) {
+      cancelAnimationFrame(tiltFrameRef.current)
+      tiltFrameRef.current = null
+    }
+    if (cardRef.current) cardRef.current.style.transform = ''
+    if (beamRef.current) beamRef.current.style.transform = ''
+  }
   const onClick = (e: React.MouseEvent) => {
     if (selectable) {
       e.preventDefault()
@@ -103,7 +119,13 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
       entries.forEach(e => { if (e.isIntersecting) setInView(true) })
     }, { rootMargin: '80px' })
     io.observe(el)
-    return () => { io.disconnect() }
+    return () => {
+      io.disconnect()
+      if (clickTimerRef.current) {
+        window.clearTimeout(clickTimerRef.current)
+        clickTimerRef.current = null
+      }
+    }
   }, [])
   useEffect(() => {
     setSizeOverride(null)
@@ -136,13 +158,16 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
     } catch {}
   }, [item.id, item.file_path, item.file_size])
   useEffect(() => {
-    setHeat(Number(item.heat_value ?? 0))
+    if (!mutationInFlightRef.current) {
+      setHeat(Number(item.heat_value ?? 0))
+    }
   }, [item.id, item.heat_value])
   const onLike = async (e: React.MouseEvent) => {
     e.stopPropagation()
     const now = Date.now()
     if (busy || (now - lastClickRef.current) < 420) return
     lastClickRef.current = now
+    mutationInFlightRef.current = true
     setHeat(h => (Number.isFinite(h) ? h + 1 : 1))
     setFlyKey(now)
     setLiking(true)
@@ -153,6 +178,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
       // 保持乐观更新，不回滚
     } finally {
       setLiking(false)
+      mutationInFlightRef.current = false
     }
   }
   const fmtHeat = (n?: number | null): string => {
@@ -192,7 +218,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
     }
   }, [heat])
   return (
-    <div className={`card tilt${selected ? ' card-selected' : ''}`} ref={cardRef} data-media-id={item.id} style={{ transform: tilt }} onMouseMove={onMove} onMouseLeave={onLeave}>
+    <div className={`card tilt${selected ? ' card-selected' : ''}`} ref={cardRef} data-media-id={item.id} onMouseMove={onMove} onMouseLeave={onLeave}>
       <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ cursor:'pointer', background:'#f5f8ff', aspectRatio: aspect }}>
         {selectable && (
           <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,.9)', padding:'4px 8px', borderRadius:10, border:'1px solid #dbe4f3' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
@@ -219,7 +245,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
           }}
         />
         <div className="shine" />
-        <div className="hover-beam" style={{ transform: beam }} />
+        <div className="hover-beam" ref={beamRef} />
 
         {ripple && <span className="ripple" style={{ left: ripple.x, top: ripple.y, width: 120, height: 120 }} />}
         {isVideo && (
@@ -288,6 +314,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
               const now = Date.now()
               if (busy || (now - lastClickDownRef.current) < 420) return
               lastClickDownRef.current = now
+              mutationInFlightRef.current = true
               setHeat(h => (Number.isFinite(h) ? h - 1 : -1))
               setFlyDownKey(now)
               setDisliking(true)
@@ -297,6 +324,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
                   if (typeof res?.heat_value === 'number') setHeat(res.heat_value)
                 } finally {
                   setDisliking(false)
+                  mutationInFlightRef.current = false
                 }
               })()
             }}

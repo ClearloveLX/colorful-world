@@ -134,6 +134,7 @@ export default function Filters({
               className="section-header"
               role="button"
               tabIndex={0}
+              aria-expanded={sectionOpen.selected}
               onClick={() => setSectionOpen(s => ({ ...s, selected: !s.selected }))}
               onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, selected: !s.selected })))}
             >
@@ -229,6 +230,7 @@ export default function Filters({
           className="section-header"
           role="button"
           tabIndex={0}
+          aria-expanded={sectionOpen.filter}
           onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}
           onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, filter: !s.filter })))}
         >
@@ -275,6 +277,7 @@ export default function Filters({
           className="section-header"
           role="button"
           tabIndex={0}
+          aria-expanded={sectionOpen.order}
           onClick={() => setSectionOpen(s => ({ ...s, order: !s.order }))}
           onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, order: !s.order })))}
         >
@@ -327,6 +330,7 @@ export default function Filters({
             className="section-header"
             role="button"
             tabIndex={0}
+            aria-expanded={sectionOpen.system}
             onClick={() => setSectionOpen(s => ({ ...s, system: !s.system }))}
             onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, system: !s.system })))}
           >
@@ -372,6 +376,7 @@ export default function Filters({
           className="section-header"
           role="button"
           tabIndex={0}
+          aria-expanded={sectionOpen.name}
           onClick={() => setSectionOpen(s => ({ ...s, name: !s.name }))}
           onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, name: !s.name })))}
         >
@@ -387,6 +392,7 @@ export default function Filters({
           className="section-header"
           role="button"
           tabIndex={0}
+          aria-expanded={sectionOpen.models}
           onClick={() => setSectionOpen(s => ({ ...s, models: !s.models }))}
           onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, models: !s.models })))}
         >
@@ -406,8 +412,8 @@ export default function Filters({
                     className="group-header"
                     role="button"
                     tabIndex={0}
-                    onClick={() => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}
-                    onKeyDown={(e) => onToggleKey(e, () => setModelOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) })))}
+                    onClick={() => setModelOpenGroups(s => ({ ...s, [group]: !s[group] }))}
+                    onKeyDown={(e) => onToggleKey(e, () => setModelOpenGroups(s => ({ ...s, [group]: !s[group] })))}
                   >
                     <span className="group-name">{group}</span>
                     <span style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -441,6 +447,7 @@ export default function Filters({
           className="section-header"
           role="button"
           tabIndex={0}
+          aria-expanded={sectionOpen.tags}
           onClick={() => setSectionOpen(s => ({ ...s, tags: !s.tags }))}
           onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, tags: !s.tags })))}
         >
@@ -465,8 +472,8 @@ export default function Filters({
                     className="group-header"
                     role="button"
                     tabIndex={0}
-                    onClick={() => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) }))}
-                    onKeyDown={(e) => onToggleKey(e, () => setTagOpenGroups(s => ({ ...s, [group]: (s[group] === undefined ? false : !s[group]) })))}
+                    onClick={() => setTagOpenGroups(s => ({ ...s, [group]: !s[group] }))}
+                    onKeyDown={(e) => onToggleKey(e, () => setTagOpenGroups(s => ({ ...s, [group]: !s[group] })))}
                   >
                     <span className="group-name">{group}</span>
                     <span style={{ display:'flex', alignItems:'center', gap:8 }}>

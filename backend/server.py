@@ -23,7 +23,6 @@ app = FastAPI(title="Media Gallery API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Length", "Content-Range"],
@@ -294,7 +293,14 @@ def get_media(
         )
         if use_true_random_cache and rows:
             db.cache_true_random_results(blacklist_cache_key, [row.get('id') for row in rows if row.get('id')])
-        slice_items = []
+        file_ids = [f['id'] for f in rows]
+        file_models_map = db.get_files_models_batch(file_ids)
+        file_tags_map = db.get_files_tags_batch(file_ids)
+        all_model_ids = set()
+        for models in file_models_map.values():
+            for m in models:
+                all_model_ids.add(m['id'])
+        model_tags_map = db.get_models_tags_batch(list(all_model_ids))
         tag_rows = db.get_tags_with_category_name(only_active=False)
         tag_meta = { r['id']: {
             'name': r['name'],
@@ -310,17 +316,14 @@ def get_media(
             if not info:
                 return (0, '', 0, '')
             return (cat_order.get(info['category_id']) or 0, info['category_name'] or '', info['tag_order'] or 0, info['name'] or '')
+        slice_items = []
         for f in rows:
-            ft = (f.get("file_type") or "").lower()
             file_id = f['id']
-            models = db.get_file_models(file_id)
-            file_tags = db.get_file_tags(file_id)
+            models = file_models_map.get(file_id, [])
+            file_tags = file_tags_map.get(file_id, [])
             model_tags = []
             for m in models:
-                try:
-                    model_tags.extend(db.get_model_tags(m['id']))
-                except Exception:
-                    pass
+                model_tags.extend(model_tags_map.get(m['id'], []))
             seen: set[str] = set()
             merged_ids = []
             for t in (file_tags + model_tags):
@@ -377,7 +380,7 @@ def get_media(
             "true_random_cache": {
                 "enabled": cache_enabled,
                 "active": use_true_random_cache,
-                "cached_count": db.count_true_random_cache() if use_true_random_cache else db.count_true_random_cache(),
+                "cached_count": db.count_true_random_cache(),
             },
         }
     except Exception as e:
@@ -413,6 +416,15 @@ def _decode_b64_path(path: str) -> str:
     except Exception:
         raise HTTPException(status_code=400, detail="invalid path")
 
+def _validate_file_path(p: str) -> str:
+    p = os.path.normpath(os.path.abspath(p))
+    if not os.path.isfile(p):
+        raise HTTPException(status_code=404, detail="file not found")
+    data_root_norm = os.path.normpath(os.path.abspath(DATA_ROOT))
+    if not p.startswith(data_root_norm + os.sep) and p != data_root_norm:
+        raise HTTPException(status_code=403, detail="access denied")
+    return p
+
 def _open_in_system(p: str, raw_path: str) -> bool:
     if os.name == "nt":
         try:
@@ -434,7 +446,7 @@ def _open_in_system(p: str, raw_path: str) -> bool:
         except Exception:
             pass
         try:
-            subprocess.Popen(f'start "" "{p}"', shell=True)
+            subprocess.Popen(['cmd', '/c', 'start', '', p])
             return True
         except Exception:
             pass
@@ -493,9 +505,7 @@ def _bulk_update_heat(file_ids: List[str], delta: int):
 
 @app.get("/api/file")
 def get_file(path: str, request: Request):
-    p = _decode_b64_path(path)
-    if not os.path.isfile(p):
-        raise HTTPException(status_code=404, detail="file not found")
+    p = _validate_file_path(_decode_b64_path(path))
     ct = _guess_content_type(p)
     rng = request.headers.get("range") or request.headers.get("Range")
     if rng:
@@ -529,9 +539,7 @@ def get_file(path: str, request: Request):
 
 @app.head("/api/file")
 def head_file(path: str):
-    p = _decode_b64_path(path)
-    if not os.path.isfile(p):
-        raise HTTPException(status_code=404, detail="file not found")
+    p = _validate_file_path(_decode_b64_path(path))
     ct = _guess_content_type(p)
     file_size = os.path.getsize(p)
     headers = {
@@ -566,10 +574,7 @@ def dislike_media(file_id: str):
 
 @app.post("/api/open")
 def open_file(path: str):
-    p = _decode_b64_path(path)
-    p = os.path.normpath(p.replace("/", os.sep))
-    if not os.path.isfile(p):
-        raise HTTPException(status_code=404, detail="file not found")
+    p = _validate_file_path(_decode_b64_path(path))
     try:
         if not _open_in_system(p, path):
             raise Exception("open failed")
