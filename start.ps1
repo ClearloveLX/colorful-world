@@ -20,8 +20,10 @@ $py = Join-Path $venv "Scripts/python.exe"
 if (-not (Test-Path $py)) { throw "Python venv not found at $py" }
 
 Write-Info "Upgrading pip and installing backend dependencies"
-& $py -m pip install -U pip | Out-Null
-& $py -m pip install fastapi uvicorn | Out-Null
+& $py -m pip install -U pip --quiet
+if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
+& $py -m pip install -r (Join-Path $ROOT "requirements.txt") --quiet
+if ($LASTEXITCODE -ne 0) { throw "pip install requirements failed" }
 Write-Ok "Backend deps ready"
 
 # 2) Build frontend

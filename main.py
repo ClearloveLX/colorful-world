@@ -37,6 +37,10 @@ def _win_logical_cmp(a, b):
 
 
 class ImageClassifierApp:
+    VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp'}
+    AUDIO_EXTENSIONS = {'.mp3', '.m4a'}
+    IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
+
     def __init__(self, root):
         self.root = root
         self.root.title("图片分类管理界面")
@@ -451,7 +455,7 @@ class ImageClassifierApp:
         
         ttk.Button(toolbar, text="选择源文件夹", command=self.select_source_folder).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="刷新列表", command=self.scan_folder).pack(side=tk.LEFT, padx=5)
-        
+
         ttk.Button(toolbar, text="模特管理", command=self.open_model_manager).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="标签管理", command=self.open_tag_manager).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="文件回显", command=self.open_file_browser).pack(side=tk.LEFT, padx=5)
@@ -524,31 +528,16 @@ class ImageClassifierApp:
         # 分类信息区域（可滚动）
         classification_container = ttk.Frame(bottom_container)
         
-        # 创建滚动框架
-        bottom_canvas = tk.Canvas(classification_container)
-        bottom_scrollbar = ttk.Scrollbar(classification_container, orient="vertical", command=bottom_canvas.yview)
-        bottom_section = ttk.Frame(bottom_canvas)
-        
-        def update_bottom_scroll_region(event=None):
-            bottom_canvas.configure(scrollregion=bottom_canvas.bbox("all"))
-        
-        bottom_section.bind("<Configure>", update_bottom_scroll_region)
-        
-        # 创建窗口并保存ID
-        bottom_window_id = bottom_canvas.create_window((0, 0), window=bottom_section, anchor="nw")
-        
-        # 绑定Canvas大小变化，更新内部窗口宽度和高度
+        bottom_canvas, bottom_scrollbar, bottom_section = self._create_scrollable_frame(classification_container)
+
+        bottom_window_id = bottom_canvas.find_all()[0] if bottom_canvas.find_all() else None
+
         def on_bottom_canvas_configure(event):
-            canvas_width = event.width
-            canvas_height = event.height
-            # 确保内容区域至少有一定高度（保留滚动能力），但在空间充足时填充整个区域
-            # 这样可以消除下方的空白区域，同时在窗口过小时保留外层滚动条
-            min_height = 650  # 基于原本的tag_canvas=560 + model_frame=80 + padding
-            target_height = max(canvas_height, min_height)
-            bottom_canvas.itemconfig(bottom_window_id, width=canvas_width, height=target_height)
+            min_height = 650
+            target_height = max(event.height, min_height)
+            bottom_canvas.itemconfig(bottom_window_id, width=event.width, height=target_height)
         bottom_canvas.bind('<Configure>', on_bottom_canvas_configure)
-        
-        bottom_canvas.configure(yscrollcommand=bottom_scrollbar.set)
+
         bottom_canvas.pack(side="left", fill="both", expand=True)
         bottom_scrollbar.pack(side="right", fill="y")
         
@@ -575,7 +564,7 @@ class ImageClassifierApp:
                             self.root.after(100, lambda: set_initial_sash(attempt + 1))
                 elif attempt < 5:
                     self.root.after(100, lambda: set_initial_sash(attempt + 1))
-            except:
+            except Exception:
                 if attempt < 3:
                     self.root.after(100, lambda: set_initial_sash(attempt + 1))
         self.root.after(100, lambda: set_initial_sash(0))
@@ -602,26 +591,15 @@ class ImageClassifierApp:
         model_select_frame = ttk.LabelFrame(classification_frame, text="选择模特（单选）")
         model_select_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
         
-        # 创建滚动框架用于模特选择 - 设置固定高度
-        self.model_canvas = tk.Canvas(model_select_frame, height=80)
-        model_scrollbar = ttk.Scrollbar(model_select_frame, orient="vertical", command=self.model_canvas.yview)
-        self.model_scrollable_frame = ttk.Frame(self.model_canvas)
-        
-        def update_model_scroll_region(event=None):
-            self.model_canvas.configure(scrollregion=self.model_canvas.bbox("all"))
-        
-        self.model_scrollable_frame.bind("<Configure>", update_model_scroll_region)
-        
-        # 创建窗口并保存ID，确保内容正确显示
-        self.model_window_id = self.model_canvas.create_window((0, 0), window=self.model_scrollable_frame, anchor="nw")
-        self.model_canvas.configure(yscrollcommand=model_scrollbar.set)
-        
-        # 绑定Canvas大小变化，更新内部窗口宽度
+        self.model_canvas, model_scrollbar, self.model_scrollable_frame = self._create_scrollable_frame(model_select_frame)
+        self.model_canvas.configure(height=80)
+
+        self.model_window_id = self.model_canvas.find_all()[0] if self.model_canvas.find_all() else None
+
         def on_model_canvas_configure(event):
-            canvas_width = event.width
-            self.model_canvas.itemconfig(self.model_window_id, width=canvas_width)
+            self.model_canvas.itemconfig(self.model_window_id, width=event.width)
         self.model_canvas.bind('<Configure>', on_model_canvas_configure)
-        
+
         self.model_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         model_scrollbar.pack(side="right", fill="y")
         
@@ -632,26 +610,15 @@ class ImageClassifierApp:
         tag_select_frame = ttk.LabelFrame(classification_frame, text="选择标签（可多选）")
         tag_select_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(12, 5))
         
-        # 创建滚动框架用于标签选择 - 设置固定高度
-        self.tag_canvas = tk.Canvas(tag_select_frame, height=560)
-        tag_scrollbar = ttk.Scrollbar(tag_select_frame, orient="vertical", command=self.tag_canvas.yview)
-        self.tag_scrollable_frame = ttk.Frame(self.tag_canvas)
-        
-        def update_tag_scroll_region(event=None):
-            self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
-        
-        self.tag_scrollable_frame.bind("<Configure>", update_tag_scroll_region)
-        
-        # 创建窗口并保存ID，确保内容正确显示
-        self.tag_window_id = self.tag_canvas.create_window((0, 0), window=self.tag_scrollable_frame, anchor="nw")
-        self.tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
-        
-        # 绑定Canvas大小变化，更新内部窗口宽度
+        self.tag_canvas, tag_scrollbar, self.tag_scrollable_frame = self._create_scrollable_frame(tag_select_frame)
+        self.tag_canvas.configure(height=560)
+
+        self.tag_window_id = self.tag_canvas.find_all()[0] if self.tag_canvas.find_all() else None
+
         def on_tag_canvas_configure(event):
-            canvas_width = event.width
-            self.tag_canvas.itemconfig(self.tag_window_id, width=canvas_width)
+            self.tag_canvas.itemconfig(self.tag_window_id, width=event.width)
         self.tag_canvas.bind('<Configure>', on_tag_canvas_configure)
-        
+
         self.tag_canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         tag_scrollbar.pack(side="right", fill="y")
 
@@ -783,7 +750,7 @@ class ImageClassifierApp:
             self.file_listbox.insert(tk.END, os.path.basename(img_file))
         self.status_label.config(text=f"找到 {len(self.image_files)} 个媒体文件")
         self.current_image_index = -1
-    
+
     def refresh_and_load_next(self):
         """刷新待处理列表并自动加载下一张图片"""
         # 保存当前索引
@@ -806,7 +773,7 @@ class ImageClassifierApp:
                 widget.destroy()
             for widget in self.tag_scrollable_frame.winfo_children():
                 widget.destroy()
-            self.model_vars.clear()
+            self.model_var.set('')
             self.tag_vars.clear()
             return
         
@@ -920,9 +887,7 @@ class ImageClassifierApp:
 
     def get_preview_image(self, path):
         ext = os.path.splitext(path)[1].lower()
-        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp'}
-        audio_exts = {'.mp3', '.m4a'}
-        if ext in video_exts:
+        if ext in self.VIDEO_EXTENSIONS:
             cap = cv2.VideoCapture(path)
             ok, frame = cap.read()
             cap.release()
@@ -930,7 +895,7 @@ class ImageClassifierApp:
                 raise RuntimeError("无法读取视频帧")
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             return Image.fromarray(rgb)
-        if ext in audio_exts:
+        if ext in self.AUDIO_EXTENSIONS:
             img = Image.new('RGB', (640, 360), '#eef6ff')
             d = ImageDraw.Draw(img)
             d.rectangle([(20,20),(620,340)], outline='#cfe2ff', width=2)
@@ -941,10 +906,19 @@ class ImageClassifierApp:
 
     def is_video_path(self, path):
         ext = os.path.splitext(path)[1].lower()
-        return ext in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp', '.mp3', '.m4a'}
+        return ext in self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS
 
     def is_gif_path(self, path):
         return os.path.splitext(path)[1].lower() == '.gif'
+
+    def _create_scrollable_frame(self, parent):
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        return canvas, scrollbar, inner
 
     def init_video(self, path):
         self.destroy_video()
@@ -965,19 +939,19 @@ class ImageClassifierApp:
         if self.video_after_id:
             try:
                 self.root.after_cancel(self.video_after_id)
-            except:
+            except Exception:
                 pass
             self.video_after_id = None
         if self.video_cap:
             try:
                 self.video_cap.release()
-            except:
+            except Exception:
                 pass
             self.video_cap = None
         self.video_playing = False
         try:
             self.video_controls_frame.pack_forget()
-        except:
+        except Exception:
             pass
         self.video_is_video = False
 
@@ -1017,13 +991,13 @@ class ImageClassifierApp:
         if self.gif_after_id:
             try:
                 self.root.after_cancel(self.gif_after_id)
-            except:
+            except Exception:
                 pass
             self.gif_after_id = None
         if self.gif_img:
             try:
                 self.gif_img.close()
-            except:
+            except Exception:
                 pass
         self.gif_img = None
         self.gif_playing = False
@@ -1033,7 +1007,7 @@ class ImageClassifierApp:
         self.gif_is_gif = False
         try:
             self.video_controls_frame.pack_forget()
-        except:
+        except Exception:
             pass
 
     def toggle_video_play(self):
@@ -1046,7 +1020,7 @@ class ImageClassifierApp:
                 if self.video_after_id:
                     try:
                         self.root.after_cancel(self.video_after_id)
-                    except:
+                    except Exception:
                         pass
                     self.video_after_id = None
             return
@@ -1059,7 +1033,7 @@ class ImageClassifierApp:
                 if self.gif_after_id:
                     try:
                         self.root.after_cancel(self.gif_after_id)
-                    except:
+                    except Exception:
                         pass
                     self.gif_after_id = None
 
@@ -1130,7 +1104,7 @@ class ImageClassifierApp:
             return
         try:
             idx = int(float(value))
-        except:
+        except Exception:
             idx = 0
         self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx))
         ok, frame = self.video_cap.read()
@@ -1156,7 +1130,7 @@ class ImageClassifierApp:
             return
         try:
             idx = int(float(value))
-        except:
+        except Exception:
             idx = 0
         idx = max(0, min(idx, self.gif_total_frames - 1))
         self.gif_current_index = idx
@@ -1280,19 +1254,19 @@ class ImageClassifierApp:
                 self.current_dialog.lift()
                 self.current_dialog.focus_force()
                 return
-            except:
+            except Exception:
                 self.current_dialog = None
         vp = tk.Toplevel(self.root)
         vp.title("视频处理")
         vp.geometry("1100x700")
         try:
             vp.state('zoomed')
-        except:
+        except Exception:
             try:
                 sw = vp.winfo_screenwidth()
                 sh = vp.winfo_screenheight()
                 vp.geometry(f"{sw}x{sh}+0+0")
-            except:
+            except Exception:
                 pass
         vp.transient(self.root)
         self.current_dialog = vp
@@ -1314,7 +1288,7 @@ class ImageClassifierApp:
         left_frame.config(width=320)
         try:
             left_frame.pack_propagate(False)
-        except:
+        except Exception:
             pass
         # 顶部源文件夹选择与刷新
         top_left_controls = ttk.Frame(left_frame)
@@ -1334,7 +1308,7 @@ class ImageClassifierApp:
         center_frame.config(width=520)
         try:
             center_frame.pack_propagate(False)
-        except:
+        except Exception:
             pass
         video_canvas = tk.Canvas(center_frame, bg="black", height=360)
         video_canvas.pack(fill=tk.X, padx=5, pady=(5,0))
@@ -1362,19 +1336,19 @@ class ImageClassifierApp:
             if vp_state["seek_after_id"]:
                 try:
                     vp.after_cancel(vp_state["seek_after_id"])
-                except:
+                except Exception:
                     pass
                 vp_state["seek_after_id"] = None
             if vp_state["after_id"]:
                 try:
                     vp.after_cancel(vp_state["after_id"])
-                except:
+                except Exception:
                     pass
                 vp_state["after_id"] = None
             if vp_state["cap"]:
                 try:
                     vp_state["cap"].release()
-                except:
+                except Exception:
                     pass
                 vp_state["cap"] = None
             vp_state["playing"] = False
@@ -1390,7 +1364,7 @@ class ImageClassifierApp:
             vp_video_seek_var.set(0)
             try:
                 video_seek.configure(from_=0, to=max(total - 1, 0))
-            except:
+            except Exception:
                 pass
             video_play_btn.config(text="播放")
             video_time_label.config(text=self.format_time_label(0, total, vp_state["fps"]))
@@ -1427,7 +1401,7 @@ class ImageClassifierApp:
                 if vp_state["after_id"]:
                     try:
                         vp.after_cancel(vp_state["after_id"])
-                    except:
+                    except Exception:
                         pass
                     vp_state["after_id"] = None
         def vp_on_seek(value):
@@ -1435,14 +1409,14 @@ class ImageClassifierApp:
                 return
             try:
                 pos = int(float(value))
-            except:
+            except Exception:
                 pos = int(vp_video_seek_var.get() or 0)
             pos = max(0, min(vp_state["total"] - 1, pos))
             vp_video_seek_var.set(pos)
             if vp_state["seek_after_id"]:
                 try:
                     vp.after_cancel(vp_state["seek_after_id"])
-                except:
+                except Exception:
                     pass
                 vp_state["seek_after_id"] = None
             def do_seek(p=pos):
@@ -1485,15 +1459,8 @@ class ImageClassifierApp:
         # 模特单选
         model_frame = ttk.LabelFrame(right_frame, text="选择模特（单选）")
         model_frame.pack(fill=tk.X, padx=5, pady=5)
-        model_canvas = tk.Canvas(model_frame, height=44)
-        model_scrollbar = ttk.Scrollbar(model_frame, orient="vertical", command=model_canvas.yview)
-        model_scrollable = ttk.Frame(model_canvas)
-        model_canvas.create_window((0,0), window=model_scrollable, anchor="nw")
-        model_canvas.configure(yscrollcommand=model_scrollbar.set)
-        try:
-            model_scrollable.bind("<Configure>", lambda e: model_canvas.configure(scrollregion=model_canvas.bbox("all")))
-        except:
-            pass
+        model_canvas, model_scrollbar, model_scrollable = self._create_scrollable_frame(model_frame)
+        model_canvas.configure(height=44)
         model_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         model_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         selected_model = tk.StringVar()
@@ -1501,15 +1468,8 @@ class ImageClassifierApp:
         # 标签多选
         tag_frame = ttk.LabelFrame(right_frame, text="选择标签（多选）")
         tag_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        tag_canvas = tk.Canvas(tag_frame, height=1120)
-        tag_scrollbar = ttk.Scrollbar(tag_frame, orient="vertical", command=tag_canvas.yview)
-        tag_scrollable = ttk.Frame(tag_canvas)
-        tag_canvas.create_window((0,0), window=tag_scrollable, anchor="nw")
-        tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
-        try:
-            tag_scrollable.bind("<Configure>", lambda e: tag_canvas.configure(scrollregion=tag_canvas.bbox("all")))
-        except:
-            pass
+        tag_canvas, tag_scrollbar, tag_scrollable = self._create_scrollable_frame(tag_frame)
+        tag_canvas.configure(height=1120)
         tag_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tag_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         tag_vars = {}
@@ -1562,7 +1522,7 @@ class ImageClassifierApp:
             auto_host_var.set(v)
             try:
                 auto_btn.config(text=("取消托管" if v else "自动托管"))
-            except:
+            except Exception:
                 pass
         auto_btn = ttk.Button(thumbs_toolbar, text="自动托管", command=toggle_auto_host)
         auto_btn.pack(side=tk.LEFT, padx=5)
@@ -1765,7 +1725,7 @@ class ImageClassifierApp:
             if total <= 0:
                 try:
                     cap.release()
-                except:
+                except Exception:
                     pass
                 gen_state["busy"] = False
                 refresh_btn.config(state=tk.NORMAL)
@@ -1778,20 +1738,20 @@ class ImageClassifierApp:
             fs = 0
             try:
                 fs = os.path.getsize(path) if os.path.exists(path) else 0
-            except:
+            except Exception:
                 fs = 0
             duration_sec = 0.0
             try:
                 duration_sec = float(total) / float(fps) if fps > 0 else 0.0
-            except:
+            except Exception:
                 duration_sec = 0.0
             try:
                 sp = int(start_pct_var.get()) if start_pct_var.get() else 0
-            except:
+            except Exception:
                 sp = 0
             try:
                 ep = int(end_pct_var.get()) if end_pct_var.get() else 100
-            except:
+            except Exception:
                 ep = 100
             sp = max(0, min(100, sp))
             ep = max(0, min(100, ep))
@@ -1800,7 +1760,7 @@ class ImageClassifierApp:
             # 采样数量由 UI 指定
             try:
                 desired_count = int(sample_count_var.get()) if sample_count_var.get() else count
-            except:
+            except Exception:
                 desired_count = count
             desired_count = max(1, min(72, desired_count))
             try:
@@ -1827,7 +1787,7 @@ class ImageClassifierApp:
                 first_pos = 0
                 positions = [first_pos] + [p for p in positions if p != first_pos]
                 positions = positions[:desired_count]
-            except:
+            except Exception:
                 pass
             canvas_w = 180
             canvas_h = 120
@@ -1865,7 +1825,7 @@ class ImageClassifierApp:
             def finish():
                 try:
                     cap.release()
-                except:
+                except Exception:
                     pass
                 gen_state["cap"] = None
                 gen_state["after_id"] = None
@@ -1877,7 +1837,7 @@ class ImageClassifierApp:
                 try:
                     thumbs_inner.update_idletasks()
                     thumbs_canvas.configure(scrollregion=thumbs_canvas.bbox('all'))
-                except:
+                except Exception:
                     pass
                 refresh_btn.config(state=tk.NORMAL)
                 stop_btn.config(state=tk.DISABLED)
@@ -1885,7 +1845,7 @@ class ImageClassifierApp:
                 try:
                     if auto_host_var.get() and thumbs_images:
                         vp.after(0, lambda: (auto_host_var.get() and save_btn.invoke()))
-                except:
+                except Exception:
                     pass
             def worker():
                 try:
@@ -1893,7 +1853,7 @@ class ImageClassifierApp:
                     if not local_cap.isOpened():
                         try:
                             local_cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
-                        except:
+                        except Exception:
                             pass
                     accepted = 0
                     prev_small = None
@@ -1949,7 +1909,7 @@ class ImageClassifierApp:
                                                 break
                                         else:
                                             continue
-                                except:
+                                except Exception:
                                     # 回退均匀
                                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                     pil_img = Image.fromarray(rgb)
@@ -1958,20 +1918,20 @@ class ImageClassifierApp:
                                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                 pil_img = Image.fromarray(rgb)
                                 gen_state["q"].put((i, pil_img))
-                        except:
+                        except Exception:
                             pass
                 finally:
                     gen_state["done"] = True
                     try:
                         local_cap.release()
-                    except:
+                    except Exception:
                         pass
             def consume():
                 consumed = 0
                 while consumed < 6:
                     try:
                         i, pil_img = gen_state["q"].get_nowait()
-                    except:
+                    except Exception:
                         break
                     make_thumb(i, pil_img)
                     gen_state["received"] += 1
@@ -2008,7 +1968,7 @@ class ImageClassifierApp:
                 return
             try:
                 vp_destroy_video()
-            except:
+            except Exception:
                 pass
             if not selected_model.get():
                 messagebox.showwarning("警告", "请选择一个模特")
@@ -2040,10 +2000,9 @@ class ImageClassifierApp:
                     else:
                         last = sorted(subs)[-1]
                         last_folder = os.path.join(base_folder, last)
-                        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp'}
                         try:
                             cnt = sum(1 for f in os.listdir(last_folder)
-                                      if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in video_exts)
+                                      if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in self.VIDEO_EXTENSIONS)
                         except Exception:
                             cnt = 0
                         if cnt >= 500:
@@ -2106,7 +2065,7 @@ class ImageClassifierApp:
                                     video_listbox.activate(next_idx)
                                     video_listbox.see(next_idx)
                                     on_select_video()
-                                except:
+                                except Exception:
                                     pass
                         save_btn.config(state=tk.NORMAL)
                     vp.after(0, after_success)
@@ -2135,13 +2094,13 @@ class ImageClassifierApp:
         def on_close2():
             try:
                 vp_destroy_video()
-            except:
+            except Exception:
                 pass
             on_close()
         vp.protocol("WM_DELETE_WINDOW", on_close2)
         try:
             cancel_btn.config(command=on_close2)
-        except:
+        except Exception:
             pass
     
     def maintain_sash_position(self):
@@ -2159,7 +2118,7 @@ class ImageClassifierApp:
             # 获取当前sash位置
             try:
                 current_pos = self.left_paned.sashpos(0)
-            except:
+            except Exception:
                 current_pos = None
             
             # 计算最小sash位置（确保下半部分至少有35%的空间，至少400像素，保证按钮区域可见）
@@ -2202,7 +2161,7 @@ class ImageClassifierApp:
             actual_pos = self.left_paned.sashpos(0)
             if actual_pos is None or abs(actual_pos - expected_pos) > 20:
                 self.maintain_sash_position()
-        except:
+        except Exception:
             pass
     
     def update_image_info(self):
@@ -2229,7 +2188,7 @@ class ImageClassifierApp:
                     h = file_record.get('image_height')
                     if w and h:
                         info_text += f"分辨率: {w}x{h}\n"
-                except:
+                except Exception:
                     pass
                 try:
                     vw = file_record.get('video_width')
@@ -2239,7 +2198,7 @@ class ImageClassifierApp:
                         info_text += f"视频分辨率: {vw}x{vh}\n"
                     if dur:
                         info_text += f"时长: {self.format_time_label_ms(dur, dur)}\n"
-                except:
+                except Exception:
                     pass
         else:
             # 文件记录不存在，显示未保存状态
@@ -2431,9 +2390,8 @@ class ImageClassifierApp:
             else:
                 last = sorted(subs)[-1]
                 last_folder = os.path.join(base_folder, last)
-                media_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}
                 try:
-                    cnt = sum(1 for f in os.listdir(last_folder) if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in media_exts)
+                    cnt = sum(1 for f in os.listdir(last_folder) if os.path.isfile(os.path.join(last_folder, f)) and os.path.splitext(f)[1].lower() in (self.IMAGE_EXTENSIONS | self.VIDEO_EXTENSIONS))
                 except Exception:
                     cnt = 0
                 if cnt >= 1000:
@@ -2566,7 +2524,7 @@ class ImageClassifierApp:
                 self.current_dialog.lift()
                 self.current_dialog.focus_force()
                 return
-            except:
+            except Exception:
                 # 如果对话框已被销毁，清除引用
                 self.current_dialog = None
         
@@ -3110,7 +3068,7 @@ class ImageClassifierApp:
                 model_type_id_var.set('')
             try:
                 model_active_state['active'] = bool(model.get('is_active', 1))
-            except:
+            except Exception:
                 model_active_state['active'] = True
             update_model_active_btn()
             
@@ -3191,22 +3149,10 @@ class ImageClassifierApp:
             tag_frame = ttk.LabelFrame(tag_dialog, text="选择标签（可多选）")
             tag_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-            # 创建滚动框架
-            tag_canvas = tk.Canvas(tag_frame)
-            tag_scrollbar = ttk.Scrollbar(tag_frame, orient="vertical", command=tag_canvas.yview)
-            tag_scrollable_frame = ttk.Frame(tag_canvas)
-            
-            tag_scrollable_frame.bind(
-                "<Configure>",
-                lambda e: tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
-            )
-            
-            tag_canvas.create_window((0, 0), window=tag_scrollable_frame, anchor="nw")
-            tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
-            
+            tag_canvas, tag_scrollbar, tag_scrollable_frame = self._create_scrollable_frame(tag_frame)
             tag_canvas.pack(side="left", fill="both", expand=True)
             tag_scrollbar.pack(side="right", fill="y")
-            
+
             # 顶部搜索框
             search_frame2 = ttk.Frame(tag_dialog)
             search_frame2.pack(fill=tk.X, padx=10, pady=5)
@@ -3311,7 +3257,7 @@ class ImageClassifierApp:
                 self.current_dialog.lift()
                 self.current_dialog.focus_force()
                 return
-            except:
+            except Exception:
                 # 如果对话框已被销毁，清除引用
                 self.current_dialog = None
         
@@ -3748,7 +3694,7 @@ class ImageClassifierApp:
                         tag_listbox.see(idx)
                     on_tag_select()
                     messagebox.showinfo("成功", "分类已保存：无")
-                except:
+                except Exception:
                     on_tag_select()
                 return
             cats = self.db.get_all_tag_categories()
@@ -3764,7 +3710,7 @@ class ImageClassifierApp:
                         tag_listbox.see(idx)
                     on_tag_select()
                     messagebox.showinfo("成功", f"分类已保存：{found['name']}")
-                except:
+                except Exception:
                     on_tag_select()
             else:
                 messagebox.showwarning("警告", "未找到选中的分类名称，无法保存")
@@ -4012,7 +3958,7 @@ class ImageClassifierApp:
             tag_desc_text.insert(tk.END, tag.get('description') or '')
             try:
                 tag_active_state['active'] = bool(tag.get('is_active', 1))
-            except:
+            except Exception:
                 tag_active_state['active'] = True
             update_tag_active_btn()
             try:
@@ -4023,7 +3969,7 @@ class ImageClassifierApp:
                     category_combo.set(nm or "无")
                 else:
                     category_combo.set("无")
-            except:
+            except Exception:
                 pass
             
             # 显示预览图
@@ -4100,22 +4046,11 @@ class ImageClassifierApp:
             model_frame = ttk.LabelFrame(model_dialog, text="选择模特（可多选）")
             model_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            # 创建滚动框架
-            model_canvas = tk.Canvas(model_frame, height=350)
-            model_scrollbar = ttk.Scrollbar(model_frame, orient="vertical", command=model_canvas.yview)
-            model_scrollable_frame = ttk.Frame(model_canvas)
-            
-            model_scrollable_frame.bind(
-                "<Configure>",
-                lambda e: model_canvas.configure(scrollregion=model_canvas.bbox("all"))
-            )
-            
-            model_canvas.create_window((0, 0), window=model_scrollable_frame, anchor="nw")
-            model_canvas.configure(yscrollcommand=model_scrollbar.set)
-            
+            model_canvas, model_scrollbar, model_scrollable_frame = self._create_scrollable_frame(model_frame)
+            model_canvas.configure(height=350)
             model_canvas.pack(side="left", fill="both", expand=True)
             model_scrollbar.pack(side="right", fill="y")
-            
+
             # 存储复选框变量
             model_vars = {}
             for model in all_models:
@@ -4192,7 +4127,7 @@ class ImageClassifierApp:
                 self.current_dialog.lift()
                 self.current_dialog.focus_force()
                 return
-            except:
+            except Exception:
                 # 如果对话框已被销毁，清除引用
                 self.current_dialog = None
         
@@ -4236,7 +4171,7 @@ class ImageClassifierApp:
         left_frame.config(width=600)
         try:
             left_frame.pack_propagate(False)
-        except:
+        except Exception:
             pass
         
         list_label = ttk.Label(left_frame, text="文件列表", font=("Arial", 12, "bold"))
@@ -4599,12 +4534,7 @@ class ImageClassifierApp:
             ttk.Label(top, text=f"重复文件 {len(duplicates)} 条（已保留每组最早记录）").pack(side=tk.LEFT)
             list_frame = ttk.Frame(dlg)
             list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
-            canvas = tk.Canvas(list_frame)
-            scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=canvas.yview)
-            inner = ttk.Frame(canvas)
-            inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-            canvas.create_window((0, 0), window=inner, anchor="nw")
-            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas, scrollbar, inner = self._create_scrollable_frame(list_frame)
             canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             dup_vars = {}
@@ -5003,21 +4933,11 @@ class ImageClassifierApp:
             tag_frame = ttk.LabelFrame(tag_dialog, text="选择标签（可多选）")
             tag_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            # 创建滚动框架
-            tag_canvas = tk.Canvas(tag_frame, height=560)
-            tag_scrollbar = ttk.Scrollbar(tag_frame, orient="vertical", command=tag_canvas.yview)
-            tag_scrollable_frame = ttk.Frame(tag_canvas)
-            
-            tag_scrollable_frame.bind(
-                "<Configure>",
-                lambda e: tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
-            )
-            
-            tag_canvas.create_window((0, 0), window=tag_scrollable_frame, anchor="nw")
-            tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
+            tag_canvas, tag_scrollbar, tag_scrollable_frame = self._create_scrollable_frame(tag_frame)
+            tag_canvas.configure(height=560)
             tag_canvas.bind("<MouseWheel>", lambda e: tag_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
             tag_scrollable_frame.bind("<MouseWheel>", lambda e: tag_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-            
+
             tag_canvas.pack(side="left", fill="both", expand=True)
             tag_scrollbar.pack(side="right", fill="y")
             
@@ -5085,7 +5005,7 @@ class ImageClassifierApp:
             file_id = file['id']
             file_path = file['file_path']
             ext = os.path.splitext(file_path)[1].lower()
-            if ext not in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv'}:
+            if ext not in self.VIDEO_EXTENSIONS:
                 messagebox.showinfo("提示", "当前仅支持为视频文件更改预览图")
                 return
             dlg = tk.Toplevel(browser_window)
@@ -5093,11 +5013,7 @@ class ImageClassifierApp:
             dlg.geometry("800x600")
             dlg.transient(browser_window)
             dlg.grab_set()
-            thumbs_canvas = tk.Canvas(dlg)
-            thumbs_scroll_y = ttk.Scrollbar(dlg, orient="vertical", command=thumbs_canvas.yview)
-            thumbs_inner = ttk.Frame(thumbs_canvas)
-            thumbs_canvas.create_window((0,0), window=thumbs_inner, anchor="nw")
-            thumbs_canvas.configure(yscrollcommand=thumbs_scroll_y.set)
+            thumbs_canvas, thumbs_scroll_y, thumbs_inner = self._create_scrollable_frame(dlg)
             thumbs_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10,0))
             thumbs_scroll_y.pack(fill=tk.Y, side=tk.RIGHT, padx=0, pady=(10,0))
             btns = ttk.Frame(dlg)
@@ -5173,7 +5089,7 @@ class ImageClassifierApp:
                 try:
                     thumbs_inner.update_idletasks()
                     thumbs_canvas.configure(scrollregion=thumbs_canvas.bbox('all'))
-                except:
+                except Exception:
                     pass
             def refresh():
                 make_thumbs(file_path)
@@ -5256,128 +5172,7 @@ class ImageClassifierApp:
             close_button.pack(pady=5)
             win.bind("<Escape>", lambda e: win.destroy())
             win.focus_set()
-            if ext not in {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v'}:
-                messagebox.showinfo("提示", "当前仅支持为视频文件更改预览图")
-                return
-            dlg = tk.Toplevel(browser_window)
-            dlg.title("更改预览图")
-            dlg.geometry("800x600")
-            dlg.transient(browser_window)
-            dlg.grab_set()
-            thumbs_canvas = tk.Canvas(dlg)
-            thumbs_scroll_y = ttk.Scrollbar(dlg, orient="vertical", command=thumbs_canvas.yview)
-            thumbs_inner = ttk.Frame(thumbs_canvas)
-            thumbs_canvas.create_window((0,0), window=thumbs_inner, anchor="nw")
-            thumbs_canvas.configure(yscrollcommand=thumbs_scroll_y.set)
-            thumbs_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10,0))
-            thumbs_scroll_y.pack(fill=tk.Y, side=tk.RIGHT, padx=0, pady=(10,0))
-            btns = ttk.Frame(dlg)
-            btns.pack(fill=tk.X, padx=10, pady=10)
-            thumbs_photos = []
-            thumbs_images = []
-            thumb_widgets = []
-            selected_idx = {'i': 0}
-            def draw_selection(canvas, w=200, h=130):
-                canvas.delete('sel_border')
-                canvas.create_rectangle(2, 2, w-2, h-2, outline='red', width=2, tags='sel_border')
-            def clear_selection():
-                for tw in thumb_widgets:
-                    tw['canvas'].delete('sel_border')
-            def make_thumbs(path, count=12):
-                for w in thumbs_inner.winfo_children():
-                    w.destroy()
-                thumbs_photos.clear()
-                thumbs_images.clear()
-                thumb_widgets.clear()
-                cap = cv2.VideoCapture(path)
-                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                if total <= 0:
-                    cap.release()
-                    return
-                try:
-                    import random
-                    margin = max(1, int(total * 0.03))
-                    usable = max(1, total - margin * 2)
-                    segment = max(1, usable // (count + 1))
-                    positions = []
-                    for i in range(1, count + 1):
-                        base = margin + i * segment
-                        jitter = max(1, segment // 3)
-                        pos = base + random.randint(-jitter, jitter)
-                        pos = max(0, min(total - 1, pos))
-                        positions.append(pos)
-                except Exception:
-                    positions = [max(0, min(total - 1, int((i/(count+1)) * total))) for i in range(1, count+1)]
-                canvas_w = 200
-                canvas_h = 130
-                cols = 4
-                for i, pos in enumerate(positions):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
-                    ok, frame = cap.read()
-                    if not ok or frame is None:
-                        continue
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    pil_img = Image.fromarray(rgb)
-                    view_img = pil_img.copy()
-                    view_img.thumbnail((canvas_w-10, canvas_h-10), Image.Resampling.LANCZOS)
-                    photo = ImageTk.PhotoImage(view_img)
-                    f = tk.Frame(thumbs_inner)
-                    r = i // cols
-                    c = i % cols
-                    f.grid(row=r, column=c, padx=8, pady=8, sticky='n')
-                    can = tk.Canvas(f, width=canvas_w, height=canvas_h, bg='white', highlightthickness=0)
-                    can.pack()
-                    can.create_image(canvas_w//2, canvas_h//2, image=photo, anchor=tk.CENTER)
-                    can.image = photo
-                    def on_click(e=None, ii=i, cc=can):
-                        selected_idx['i'] = ii
-                        clear_selection()
-                        draw_selection(cc, canvas_w, canvas_h)
-                    can.bind('<Button-1>', on_click)
-                    thumbs_photos.append(photo)
-                    thumbs_images.append(pil_img)
-                    thumb_widgets.append({'canvas': can})
-                cap.release()
-                if thumb_widgets:
-                    selected_idx['i'] = 0
-                    draw_selection(thumb_widgets[0]['canvas'], canvas_w, canvas_h)
-                try:
-                    thumbs_inner.update_idletasks()
-                    thumbs_canvas.configure(scrollregion=thumbs_canvas.bbox('all'))
-                except:
-                    pass
-            def refresh():
-                make_thumbs(file_path)
-            def save_selected():
-                if not thumbs_images:
-                    messagebox.showwarning("警告", "请先生成预览图")
-                    return
-                i = selected_idx['i']
-                if i < 0 or i >= len(thumbs_images):
-                    i = 0
-                full_img = thumbs_images[i]
-                out_img = full_img.copy()
-                max_w = 1280
-                if out_img.width > max_w or out_img.height > max_w:
-                    out_img.thumbnail((max_w, max_w), Image.Resampling.LANCZOS)
-                target_folder = os.path.dirname(file_path)
-                thumb_filename = f"{file_id}_thumb.jpg"
-                thumb_path = os.path.join(target_folder, thumb_filename)
-                try:
-                    out_img.save(thumb_path, format='JPEG', quality=90, optimize=True, progressive=True, subsampling=0)
-                except Exception:
-                    out_img.save(thumb_path, format='JPEG', quality=90)
-                try:
-                    self.db.update_file_thumbnail(file_id, thumb_path)
-                    on_file_select()
-                    messagebox.showinfo("成功", "预览图已更新！")
-                    dlg.destroy()
-                except Exception as e:
-                    messagebox.showerror("错误", f"更新失败:\n{str(e)}")
-            ttk.Button(btns, text="刷新预览图", command=refresh).pack(side=tk.LEFT, padx=5)
-            ttk.Button(btns, text="保存为封面", command=save_selected).pack(side=tk.LEFT, padx=5)
-            ttk.Button(btns, text="取消", command=dlg.destroy).pack(side=tk.RIGHT, padx=5)
-            refresh()
+
         
         file_listbox.bind('<<ListboxSelect>>', on_file_select)
         file_listbox.bind('<Configure>', load_more_if_needed)
@@ -5403,7 +5198,7 @@ class ImageClassifierApp:
                 self.current_dialog.lift()
                 self.current_dialog.focus_force()
                 return
-            except:
+            except Exception:
                 # 如果对话框已被销毁，清除引用
                 self.current_dialog = None
         
@@ -5439,19 +5234,8 @@ class ImageClassifierApp:
         model_container = ttk.LabelFrame(selection_frame, text="选择模特（可多选）")
         model_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
-        # 创建滚动框架
-        model_canvas = tk.Canvas(model_container)
-        model_scrollbar = ttk.Scrollbar(model_container, orient=tk.VERTICAL, command=model_canvas.yview)
-        model_scrollable_frame = ttk.Frame(model_canvas)
-        
-        model_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: model_canvas.configure(scrollregion=model_canvas.bbox("all"))
-        )
-        
-        model_canvas.create_window((0, 0), window=model_scrollable_frame, anchor="nw")
-        model_canvas.configure(yscrollcommand=model_scrollbar.set)
-        
+        model_canvas, model_scrollbar, model_scrollable_frame = self._create_scrollable_frame(model_container)
+
         # 加载模特列表
         models = self.db.get_all_models()
         model_vars = {}  # {id: IntVar}
@@ -5479,19 +5263,8 @@ class ImageClassifierApp:
         tag_container = ttk.LabelFrame(selection_frame, text="选择标签（可多选）")
         tag_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
-        # 创建滚动框架
-        tag_canvas = tk.Canvas(tag_container)
-        tag_scrollbar = ttk.Scrollbar(tag_container, orient=tk.VERTICAL, command=tag_canvas.yview)
-        tag_scrollable_frame = ttk.Frame(tag_canvas)
-        
-        tag_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
-        )
-        
-        tag_canvas.create_window((0, 0), window=tag_scrollable_frame, anchor="nw")
-        tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
-        
+        tag_canvas, tag_scrollbar, tag_scrollable_frame = self._create_scrollable_frame(tag_container)
+
         # 加载标签列表
         tags = self.db.get_tags_with_category_name()
         tag_vars = {}
@@ -5542,15 +5315,7 @@ class ImageClassifierApp:
         ttk.Checkbutton(file_controls, text="自动刷新", variable=auto_refresh_var).pack(side=tk.LEFT, padx=6)
         file_vars = {}
         filtered_files_data = []
-        file_canvas = tk.Canvas(file_container)
-        file_scrollbar = ttk.Scrollbar(file_container, orient=tk.VERTICAL, command=file_canvas.yview)
-        file_scrollable_frame = ttk.Frame(file_canvas)
-        file_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: file_canvas.configure(scrollregion=file_canvas.bbox("all"))
-        )
-        file_canvas.create_window((0, 0), window=file_scrollable_frame, anchor="nw")
-        file_canvas.configure(yscrollcommand=file_scrollbar.set)
+        file_canvas, file_scrollbar, file_scrollable_frame = self._create_scrollable_frame(file_container)
         def reload_files():
             nonlocal filtered_files_data
             selected_model_ids = [model_id for model_id, var in model_vars.items() if var.get() == 1]

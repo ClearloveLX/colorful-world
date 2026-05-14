@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from typing import Optional
+import logging
 import os
 import base64
 import hashlib
@@ -13,6 +14,8 @@ import subprocess
 import urllib.request
 import urllib.parse
 import ctypes
+
+logger = logging.getLogger("colorfulworld")
 from typing import List
 from pydantic import BaseModel
 
@@ -384,8 +387,8 @@ def get_media(
             },
         }
     except Exception as e:
-        print("get_media error", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_media error")
+        raise HTTPException(status_code=500, detail="internal error")
 
 # 直接按绝对路径返回本地文件（用于 DATA_ROOT 在其他盘符时）
 def _guess_content_type(p: str) -> str:
