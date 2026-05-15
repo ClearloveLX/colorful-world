@@ -60,6 +60,8 @@ class ImageClassifierApp:
         self._preloaded_photo = None
         self._preloaded_index = -1
         self._preloaded_path = None
+        self._preloaded_canvas_w = 0
+        self._preloaded_canvas_h = 0
         
         # 自动下一张模式
         self.auto_next = tk.BooleanVar(value=True)
@@ -853,12 +855,20 @@ class ImageClassifierApp:
             if canvas_height <= 1:
                 canvas_height = 450
             if img is not None:
-                # 检查预加载缓存
-                if self._preloaded_path == image_path and self._preloaded_photo is not None:
+                # 检查预加载缓存（校验画布尺寸是否匹配，允许 10px 误差）
+                cache_ok = (
+                    self._preloaded_path == image_path
+                    and self._preloaded_photo is not None
+                    and abs(self._preloaded_canvas_w - canvas_width) <= 10
+                    and abs(self._preloaded_canvas_h - canvas_height) <= 10
+                )
+                if cache_ok:
                     photo = self._preloaded_photo
                     self._preloaded_photo = None
                     self._preloaded_path = None
                     self._preloaded_index = -1
+                    self._preloaded_canvas_w = 0
+                    self._preloaded_canvas_h = 0
                 else:
                     img.thumbnail((canvas_width - 20, canvas_height - 20), Image.Resampling.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
@@ -931,9 +941,16 @@ class ImageClassifierApp:
                 self._preloaded_photo = None
                 self._preloaded_index = -1
                 self._preloaded_path = None
+                self._preloaded_canvas_w = 0
+                self._preloaded_canvas_h = 0
                 return
             next_path = self.image_files[next_idx]
             if self.is_video_path(next_path):
+                self._preloaded_photo = None
+                self._preloaded_index = -1
+                self._preloaded_path = None
+                self._preloaded_canvas_w = 0
+                self._preloaded_canvas_h = 0
                 return
             canvas_width = self.image_canvas.winfo_width()
             canvas_height = self.image_canvas.winfo_height()
@@ -946,10 +963,14 @@ class ImageClassifierApp:
             self._preloaded_photo = ImageTk.PhotoImage(img)
             self._preloaded_index = next_idx
             self._preloaded_path = next_path
+            self._preloaded_canvas_w = canvas_width
+            self._preloaded_canvas_h = canvas_height
         except Exception:
             self._preloaded_photo = None
             self._preloaded_index = -1
             self._preloaded_path = None
+            self._preloaded_canvas_w = 0
+            self._preloaded_canvas_h = 0
 
     def _create_scrollable_frame(self, parent):
         canvas = tk.Canvas(parent)
@@ -2344,42 +2365,6 @@ class ImageClassifierApp:
         if hasattr(self, 'tag_canvas'):
             self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
     
-    def save_classification(self):
-        """保存分类信息"""
-        if not self.current_image_path:
-            messagebox.showwarning("警告", "请先选择一张图片")
-            return
-        
-        # 获取选中的模特（单选）
-        selected_model_id = self.model_var.get()
-        if not selected_model_id:
-            messagebox.showwarning("警告", "请选择一个模特")
-            return
-        
-        # 获取选中的标签
-        selected_tag_ids = [tag_id for tag_id, var in self.tag_vars.items() if var.get()]
-        
-        # 如果文件记录不存在，先创建文件记录
-        if not self.current_file_id:
-            if not self.current_image_path:
-                messagebox.showerror("错误", "无法保存：图片路径不存在")
-                return
-            self.current_file_id = self.db.add_file(self.current_image_path)
-        
-        # 保存到数据库（模特改为单个ID的列表）
-        self.db.set_file_models(self.current_file_id, [selected_model_id])
-        self.db.set_file_tags(self.current_file_id, selected_tag_ids)
-        
-        # 保存后优先恢复当前预制的标签选择
-        self.last_selected_model_id = selected_model_id
-        if not self._restore_current_preset_tags('image', preset_name=self.image_preset_var.get()):
-            self.last_selected_tag_ids = selected_tag_ids
-        
-        # 更新显示
-        self.update_image_info()
-        
-        self.status_label.config(text="分类信息已保存")
-    
     def save_image(self):
         """保存当前图片到数据库"""
         if not self.current_image_path:
@@ -2402,14 +2387,9 @@ class ImageClassifierApp:
             return
         selected_model_ids = [selected_model_id]  # 转换为列表以兼容后续代码
         
-        # 获取选中的标签
+        # 获取选中的标签（可选）
         selected_tag_ids = [tag_id for tag_id, var in self.tag_vars.items() if var.get()]
-        
-        # 检查是否至少选择了一个标签
-        if not selected_tag_ids:
-            messagebox.showwarning("警告", "请至少选择一个标签")
-            return
-        
+
         try:
             # 如果文件记录不存在，先创建文件记录获取ID
             if not self.current_file_id:
