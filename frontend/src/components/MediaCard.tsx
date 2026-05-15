@@ -219,10 +219,10 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   }, [heat])
   return (
     <div className={`card tilt${selected ? ' card-selected' : ''}`} ref={cardRef} data-media-id={item.id} onMouseMove={onMove} onMouseLeave={onLeave}>
-      <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ cursor:'pointer', background:'#f5f8ff', aspectRatio: aspect }}>
+      <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ cursor:'pointer', background:'#e8e8ed', aspectRatio: aspect }}>
         {selectable && (
-          <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,.9)', padding:'4px 8px', borderRadius:10, border:'1px solid #dbe4f3' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
-            <input type="checkbox" checked={!!selected} readOnly />
+          <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
+            <input type="checkbox" checked={!!selected} readOnly style={{ accentColor:'#007AFF' }} />
             <span className="muted">选择</span>
           </label>
         )}
