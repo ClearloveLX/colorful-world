@@ -55,6 +55,11 @@ class ImageClassifierApp:
         self.current_file_id = None
         self.current_image_index = -1
         self.image_files = []
+
+        # 预加载缓存
+        self._preloaded_photo = None
+        self._preloaded_index = -1
+        self._preloaded_path = None
         
         # 自动下一张模式
         self.auto_next = tk.BooleanVar(value=True)
@@ -637,10 +642,10 @@ class ImageClassifierApp:
         save_button_frame = ttk.Frame(button_frame)
         save_button_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        # 保存图片按钮
+        # 保存按钮 — 统一执行：保存标签→移动文件→自动下一张
         save_image_button = tk.Button(
-            save_button_frame, 
-            text="💾 保存图片", 
+            save_button_frame,
+            text="💾 保存并归档 (S)",
             command=self.save_image,
             bg="#4CAF50",
             fg="white",
@@ -650,11 +655,11 @@ class ImageClassifierApp:
             cursor="hand2"
         )
         save_image_button.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, ipady=5)
-        
+
         # 加入黑名单按钮
         blacklist_button = tk.Button(
-            save_button_frame, 
-            text="🚫 加入黑名单", 
+            save_button_frame,
+            text="🚫 丢弃到黑名单",
             command=self.add_to_blacklist,
             bg="#F44336",
             fg="white",
@@ -688,7 +693,7 @@ class ImageClassifierApp:
         scrollbar = ttk.Scrollbar(list_container)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.file_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 10))
+        self.file_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 10), exportselection=False)
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.file_listbox.bind('<<ListboxSelect>>', self.on_file_select)
         scrollbar.config(command=self.file_listbox.yview)
@@ -699,7 +704,7 @@ class ImageClassifierApp:
         self.refresh_image_preset_controls()
     
     def bind_shortcuts(self):
-        """绑定键盘快捷键"""
+        """绑定键盘快捷键 — 保留图片处理核心快捷键"""
         self.root.bind('<Key-space>', lambda e: self.load_next())
         self.root.bind('<Key-Left>', lambda e: self.load_previous())
         self.root.bind('<Key-Right>', lambda e: self.load_next())
@@ -707,14 +712,10 @@ class ImageClassifierApp:
         self.root.bind('<Control-A>', lambda e: self.load_previous())
         self.root.bind('<Control-d>', lambda e: self.load_next())
         self.root.bind('<Control-D>', lambda e: self.load_next())
-        self.root.bind('<Key-s>', lambda e: self.save_classification())
-        self.root.bind('<Key-S>', lambda e: self.save_classification())
-        self.root.bind('<Control-s>', lambda e: self.save_image())
-        self.root.bind('<Control-S>', lambda e: self.save_image())
+        self.root.bind('<Key-s>', lambda e: self.save_image())
+        self.root.bind('<Key-S>', lambda e: self.save_image())
         self.root.bind_all('<Control-MouseWheel>', self.on_global_preset_mousewheel, add='+')
-        # 绑定窗口大小变化事件，确保sash位置保持合理
         self.root.bind('<Configure>', lambda e: self.on_window_configure(e))
-        # 确保焦点在窗口上
         self.root.focus_set()
     
     def on_window_configure(self, event):
@@ -731,7 +732,7 @@ class ImageClassifierApp:
         folder = filedialog.askdirectory(title="选择包含图片的文件夹")
         if folder:
             self.file_manager.set_source_folder(folder)
-            self.source_folder_label.config(text=f"源文件夹: {os.path.basename(folder)}")
+            self.source_folder_label.config(text=f"源: {os.path.basename(folder)}")
             self.scan_folder()
             # 自动加载第一张图片
             if self.image_files:
@@ -748,7 +749,7 @@ class ImageClassifierApp:
         self.file_listbox.delete(0, tk.END)
         for img_file in self.image_files:
             self.file_listbox.insert(tk.END, os.path.basename(img_file))
-        self.status_label.config(text=f"找到 {len(self.image_files)} 个媒体文件")
+        self.status_label.config(text=f"共 {len(self.image_files)} 个文件")
         self.current_image_index = -1
 
     def refresh_and_load_next(self):
@@ -808,14 +809,14 @@ class ImageClassifierApp:
         if self.current_image_index < len(self.image_files) - 1:
             self.load_image_by_index(self.current_image_index + 1)
         else:
-            self.status_label.config(text="已经是最后一张图片")
+            self.status_label.config(text="已经是最后一张")
     
     def load_previous(self):
         """加载上一张图片"""
         if self.current_image_index > 0:
             self.load_image_by_index(self.current_image_index - 1)
         else:
-            self.status_label.config(text="已经是第一张图片")
+            self.status_label.config(text="已经是第一张")
     
     def on_file_select(self, event):
         """选择文件时的回调"""
@@ -852,8 +853,15 @@ class ImageClassifierApp:
             if canvas_height <= 1:
                 canvas_height = 450
             if img is not None:
-                img.thumbnail((canvas_width - 20, canvas_height - 20), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
+                # 检查预加载缓存
+                if self._preloaded_path == image_path and self._preloaded_photo is not None:
+                    photo = self._preloaded_photo
+                    self._preloaded_photo = None
+                    self._preloaded_path = None
+                    self._preloaded_index = -1
+                else:
+                    img.thumbnail((canvas_width - 20, canvas_height - 20), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
                 self.image_canvas.delete("all")
                 x = canvas_width // 2
                 y = canvas_height // 2
@@ -880,8 +888,12 @@ class ImageClassifierApp:
             self.root.after(200, self.maintain_sash_position)  # 双重保险
             
             # 确保焦点在窗口上以便使用快捷键
+            # 更新状态栏
+            self.status_label.config(text=f"进度: {self.current_image_index + 1} / {len(self.image_files)}")
+            # 预加载下一张图片
+            self.root.after(80, self._preload_next_image)
             self.root.focus_set()
-            
+
         except Exception as e:
             messagebox.showerror("错误", f"加载预览失败: {str(e)}")
 
@@ -910,6 +922,34 @@ class ImageClassifierApp:
 
     def is_gif_path(self, path):
         return os.path.splitext(path)[1].lower() == '.gif'
+
+    def _preload_next_image(self):
+        """预加载下一张图片到缓存，减少翻页延迟"""
+        try:
+            next_idx = self.current_image_index + 1
+            if next_idx >= len(self.image_files):
+                self._preloaded_photo = None
+                self._preloaded_index = -1
+                self._preloaded_path = None
+                return
+            next_path = self.image_files[next_idx]
+            if self.is_video_path(next_path):
+                return
+            canvas_width = self.image_canvas.winfo_width()
+            canvas_height = self.image_canvas.winfo_height()
+            if canvas_width <= 1:
+                canvas_width = 600
+            if canvas_height <= 1:
+                canvas_height = 450
+            img = self.get_preview_image(next_path)
+            img.thumbnail((canvas_width - 20, canvas_height - 20), Image.Resampling.LANCZOS)
+            self._preloaded_photo = ImageTk.PhotoImage(img)
+            self._preloaded_index = next_idx
+            self._preloaded_path = next_path
+        except Exception:
+            self._preloaded_photo = None
+            self._preloaded_index = -1
+            self._preloaded_path = None
 
     def _create_scrollable_frame(self, parent):
         canvas = tk.Canvas(parent)
@@ -1300,7 +1340,7 @@ class ImageClassifierApp:
         # 搜索
         search_entry = ttk.Entry(left_frame)
         search_entry.pack(fill=tk.X, padx=5, pady=5)
-        video_listbox = tk.Listbox(left_frame)
+        video_listbox = tk.Listbox(left_frame, exportselection=False)
         video_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         center_frame = ttk.LabelFrame(main_frame, text="选择缩略图（点击选择其中一张作为封面）")
@@ -2627,7 +2667,7 @@ class ImageClassifierApp:
         scrollbar = ttk.Scrollbar(list_container)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        model_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 11))
+        model_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 11), exportselection=False)
         model_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # 保存左侧列表的选择状态（需要在绑定之前定义）
@@ -2938,7 +2978,7 @@ class ImageClassifierApp:
         tag_scrollbar = ttk.Scrollbar(tag_list_container)
         tag_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        tag_listbox = tk.Listbox(tag_list_container, yscrollcommand=tag_scrollbar.set, font=("Arial", 10), height=20)
+        tag_listbox = tk.Listbox(tag_list_container, yscrollcommand=tag_scrollbar.set, font=("Arial", 10), height=20, exportselection=False)
         tag_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tag_scrollbar.config(command=tag_listbox.yview)
         
@@ -2987,23 +3027,12 @@ class ImageClassifierApp:
         
         tag_listbox.bind('<Double-Button-1>', on_tag_double_click)
         
-        # 确保tag_listbox可以获得焦点，同时保存左侧列表的选择
+        # 点击时同步选择状态（<<ListboxSelect>>在点击已选中项时不触发）
         def on_tag_listbox_click(event):
-            # 保存左侧列表的当前选择
-            selection = model_listbox.curselection()
-            if selection:
-                saved_model_selection[:] = list(selection)
-            # 保存右侧列表的当前选择
             tag_selection = tag_listbox.curselection()
             if tag_selection:
                 saved_tag_selection[:] = list(tag_selection)
-            # 设置焦点到右侧列表
             tag_listbox.focus_set()
-            # 确保左侧列表的选择不被清除
-            if saved_model_selection:
-                model_listbox.selection_clear(0, tk.END)
-                for idx in saved_model_selection:
-                    model_listbox.selection_set(idx)
         
         tag_listbox.bind('<Button-1>', on_tag_listbox_click)
         
@@ -3383,16 +3412,16 @@ class ImageClassifierApp:
         # 标签列表
         list_frame = ttk.LabelFrame(left_frame, text="标签列表")
         list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
+
         list_container = ttk.Frame(list_frame)
         list_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         scrollbar = ttk.Scrollbar(list_container)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        tag_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 11))
+
+        tag_listbox = tk.Listbox(list_container, yscrollcommand=scrollbar.set, font=("Arial", 11), exportselection=False)
         tag_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
+
         # 保存左侧列表的选择状态（需要在绑定之前定义）
         saved_tag_selection = []
         # 存储当前显示的标签列表（用于通过索引获取ID）
@@ -3547,7 +3576,7 @@ class ImageClassifierApp:
             listc.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
             sbar = ttk.Scrollbar(listc)
             sbar.pack(side=tk.RIGHT, fill=tk.Y)
-            cat_listbox = tk.Listbox(listc, yscrollcommand=sbar.set, font=("Arial", 11))
+            cat_listbox = tk.Listbox(listc, yscrollcommand=sbar.set, font=("Arial", 11), exportselection=False)
             cat_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             sbar.config(command=cat_listbox.yview)
             displayed_categories = []
@@ -3832,7 +3861,7 @@ class ImageClassifierApp:
         model_scrollbar = ttk.Scrollbar(model_list_container)
         model_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        model_listbox = tk.Listbox(model_list_container, yscrollcommand=model_scrollbar.set, font=("Arial", 10))
+        model_listbox = tk.Listbox(model_list_container, yscrollcommand=model_scrollbar.set, font=("Arial", 10), exportselection=False)
         model_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         model_scrollbar.config(command=model_listbox.yview)
         
@@ -3881,23 +3910,12 @@ class ImageClassifierApp:
         
         model_listbox.bind('<Double-Button-1>', on_model_double_click)
         
-        # 确保model_listbox可以获得焦点，同时保存左侧列表的选择
+        # 点击时同步选择状态（<<ListboxSelect>>在点击已选中项时不触发）
         def on_model_listbox_click(event):
-            # 保存左侧列表的当前选择
-            selection = tag_listbox.curselection()
-            if selection:
-                saved_tag_selection[:] = list(selection)
-            # 保存右侧列表的当前选择
             model_selection = model_listbox.curselection()
             if model_selection:
                 saved_model_selection[:] = list(model_selection)
-            # 设置焦点到右侧列表
             model_listbox.focus_set()
-            # 确保左侧列表的选择不被清除
-            if saved_tag_selection:
-                tag_listbox.selection_clear(0, tk.END)
-                for idx in saved_tag_selection:
-                    tag_listbox.selection_set(idx)
         
         model_listbox.bind('<Button-1>', on_model_listbox_click)
         
@@ -4183,7 +4201,7 @@ class ImageClassifierApp:
         list_scrollbar = ttk.Scrollbar(list_container)
         list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        file_listbox = tk.Listbox(list_container, yscrollcommand=list_scrollbar.set, font=("Arial", 10))
+        file_listbox = tk.Listbox(list_container, yscrollcommand=list_scrollbar.set, font=("Arial", 10), exportselection=False)
         file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         list_scrollbar.config(command=file_listbox.yview)
         
@@ -4303,8 +4321,8 @@ class ImageClassifierApp:
         def on_info_text_focus_out(event):
             """信息框失去焦点时，恢复列表焦点和选择状态"""
             restore_selection()
-            # 延迟恢复焦点，确保复制操作完成
-            file_listbox.after(100, lambda: file_listbox.focus_set() if current_selected_index[0] is not None else None)
+            if current_selected_index[0] is not None:
+                file_listbox.focus_set()
         
         # 阻止编辑：绑定所有可能修改内容的事件
         info_text.bind("<Key>", prevent_edit)
@@ -4316,9 +4334,6 @@ class ImageClassifierApp:
         # 绑定焦点事件：允许信息框获得焦点以便复制，但保持列表选择状态
         info_text.bind("<FocusIn>", on_info_text_focus_in)
         info_text.bind("<FocusOut>", on_info_text_focus_out)
-        
-        # 设置Listbox的exportselection为False，这样即使失去焦点，选择状态也会保持
-        file_listbox.config(exportselection=False)
         
         # 存储文件数据
         displayed_files = []

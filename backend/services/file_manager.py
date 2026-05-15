@@ -24,6 +24,10 @@ class FileManager:
     def set_source_folder(self, folder):
         """设置源文件夹"""
         self.source_folder = folder
+
+    def get_source_folder(self):
+        """获取源文件夹路径"""
+        return self.source_folder or ""
     
     def get_image_files(self):
         """获取源文件夹中的所有媒体文件"""
