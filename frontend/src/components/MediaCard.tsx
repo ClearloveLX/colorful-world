@@ -3,9 +3,9 @@ import type { MediaItem } from '../types'
 import { likeMedia, dislikeMedia } from '../api'
 
 type Props = { item: MediaItem; onOpen: () => void; onOpenSystem?: () => void; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
-type ExtraProps = { selectable?: boolean; selected?: boolean; onSelectToggle?: () => void }
+type ExtraProps = { selectable?: boolean; selected?: boolean; onSelectToggle?: () => void; dragging?: boolean }
 
-export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onModelClick, selectable, selected, onSelectToggle }: Props & ExtraProps) {
+export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onModelClick, selectable, selected, onSelectToggle, dragging }: Props & ExtraProps) {
   const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(item.file_type.toLowerCase())
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -59,6 +59,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
     return `${m}分${pad(s)}秒`
   }
   const onMove = (e: React.MouseEvent) => {
+    if (dragging) return
     const el = cardRef.current
     if (!el) return
     if (tiltFrameRef.current) return

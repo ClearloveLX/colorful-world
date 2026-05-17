@@ -54,6 +54,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const dragSelectingRef = useRef<boolean>(false)
   const blockClickRef = useRef<boolean>(false)
   const blockTimerRef = useRef<number | null>(null)
+  const dragRafRef = useRef<number | null>(null)
+  const scrollRafRef = useRef<number | null>(null)
+  const pendingRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null)
+  const origUserSelectRef = useRef<string>('')
   const retryTimerRef = useRef<number | null>(null)
   const retryCountsRef = useRef<Map<string, number>>(new Map())
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -202,16 +206,45 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
 
   const onMasonryMouseDown = (e: React.MouseEvent) => {
     if (!selectMode || e.button !== 0) return
+    e.preventDefault()
     const DRAG_THRESHOLD = 8
     const MIN_RECT = 8
+    origUserSelectRef.current = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
     const start = { x: e.clientX, y: e.clientY }
     dragStartRef.current = start
     dragSelectingRef.current = false
     setDragSelecting(false)
     setSelectRect(null)
+    let lastClientY = e.clientY
+    const stopAutoScroll = () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
+      }
+    }
+    const startAutoScroll = () => {
+      const EDGE = 80
+      const SPEED = 8
+      const loop = () => {
+        const h = window.innerHeight
+        if (lastClientY < EDGE) {
+          window.scrollBy(0, -SPEED * (EDGE - lastClientY) / EDGE)
+        } else if (lastClientY > h - EDGE) {
+          window.scrollBy(0, SPEED * (lastClientY - (h - EDGE)) / EDGE)
+        } else {
+          scrollRafRef.current = null
+          return
+        }
+        scrollRafRef.current = requestAnimationFrame(loop)
+      }
+      stopAutoScroll()
+      scrollRafRef.current = requestAnimationFrame(loop)
+    }
     const onMove = (ev: MouseEvent) => {
       const s = dragStartRef.current
       if (!s) return
+      lastClientY = ev.clientY
       const dx = ev.clientX - s.x
       const dy = ev.clientY - s.y
       if (!dragSelectingRef.current && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
@@ -223,11 +256,25 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       const top = Math.min(s.y, ev.clientY)
       const width = Math.abs(dx)
       const height = Math.abs(dy)
-      setSelectRect({ left, top, width, height })
+      pendingRectRef.current = { left, top, width, height }
+      if (!dragRafRef.current) {
+        dragRafRef.current = requestAnimationFrame(() => {
+          dragRafRef.current = null
+          if (pendingRectRef.current) {
+            setSelectRect(pendingRectRef.current)
+          }
+          const h = window.innerHeight
+          if (lastClientY < 80 || lastClientY > h - 80) startAutoScroll()
+          else stopAutoScroll()
+        })
+      }
     }
     const onUp = (ev: MouseEvent) => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      if (dragRafRef.current) { cancelAnimationFrame(dragRafRef.current); dragRafRef.current = null }
+      stopAutoScroll()
+      document.body.style.userSelect = origUserSelectRef.current
       const s = dragStartRef.current
       if (s && dragSelectingRef.current) {
         const left = Math.min(s.x, ev.clientX)
@@ -557,6 +604,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
                 onModelClick={onModelClick}
                 selectable={selectMode}
                 selected={selectedIds.has(item.id)}
+                dragging={dragSelecting}
                 onSelectToggle={() => {
                   setSelectedIds(prev => {
                     const s = new Set(prev)
