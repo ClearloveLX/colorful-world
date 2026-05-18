@@ -611,8 +611,8 @@ body {
   border-color: var(--accent-border);
   box-shadow: var(--shadow-card-hover);
 }
-.card.tilt { transition: transform 0.08s linear; }
-.card.tilt:hover { transition: transform 0.08s linear; }
+.card.tilt { transition: transform 0.08s linear, box-shadow 0.35s var(--ease), border-color 0.35s var(--ease); }
+.card.tilt:hover { transition: transform 0.08s linear, box-shadow 0.35s var(--ease), border-color 0.35s var(--ease); }
 
 .card-selected {
   border-color: var(--accent-purple);
@@ -1875,6 +1875,6 @@ select:focus-visible {
     transition-duration: 0.01ms !important;
   }
   .bg-anim:before, .bg-anim:after, .bg-anim .bg-blob-3 { animation: none !important; }
-  .card.tilt { transition: none !important; }
+  .card.tilt, .card.tilt:hover { transition: none !important; }
   .back-to-top::after { animation: none !important; }
 }
