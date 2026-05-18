@@ -68,14 +68,14 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
       const r = el.getBoundingClientRect()
       const x = e.clientX - r.left
       const y = e.clientY - r.top
-      const rx = ((y / r.height) - 0.5) * -10
-      const ry = ((x / r.width) - 0.5) * 12
+      const rx = ((y / r.height) - 0.5) * -20
+      const ry = ((x / r.width) - 0.5) * 24
       el.style.transform = `perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(4px)`
       // Image layer reverse parallax
       const img = el.querySelector('.img-parallax') as HTMLElement | null
       if (img) {
-        const ix = ((x / r.width) - 0.5) * 8
-        const iy = ((y / r.height) - 0.5) * 6
+        const ix = ((x / r.width) - 0.5) * 16
+        const iy = ((y / r.height) - 0.5) * 12
         img.style.transform = `translate(${ix}px, ${iy}px) scale(1.03)`
       }
       // Beam tracking
@@ -230,7 +230,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
   }, [heat])
   return (
     <div className={`card tilt${selected ? ' card-selected' : ''}`} ref={cardRef} data-media-id={item.id} onMouseMove={onMove} onMouseLeave={onLeave}>
-      <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ cursor:'pointer', background:'#e8e8ed', aspectRatio: aspect }}>
+      <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ aspectRatio: aspect }}>
         {selectable && (
           <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
             <input type="checkbox" checked={!!selected} readOnly style={{ accentColor:'#007AFF' }} />
