@@ -1365,25 +1365,71 @@ body {
 /* ── Skeleton Loading ────────────────────────── */
 .skeleton {
   break-inside: avoid;
+  width: 100%;
   margin-bottom: 14px;
   border-radius: var(--r-xl);
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--surface-solid);
+  animation: skFadeIn 0.45s var(--ease) both;
 }
-.skeleton .block {
-  height: 200px;
-  background: linear-gradient(90deg, #f0f0f2 0%, #e6e6ea 50%, #f0f0f2 100%);
-  background-size: 200% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
+.skeleton .sk-thumb {
+  height: var(--sk-h, 300px);
+  background: linear-gradient(160deg, #f4f4f6 0%, #ececf0 40%, #f0f0f3 100%);
+  position: relative;
+  overflow: hidden;
 }
-.skeleton .line {
-  height: 12px;
-  margin: 10px;
-  background: linear-gradient(90deg, #f0f0f2 0%, #e6e6ea 50%, #f0f0f2 100%);
-  background-size: 200% 100%;
-  animation: shimmer 1.4s ease-in-out infinite;
-  border-radius: var(--r-sm);
+.skeleton .sk-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255,255,255,0.5) 45%,
+    rgba(255,255,255,0.8) 50%,
+    rgba(255,255,255,0.5) 55%,
+    transparent 100%
+  );
+  animation: skShimmer 2s ease-in-out infinite;
+}
+.skeleton .sk-meta {
+  display: flex;
+  gap: 7px;
+  padding: 12px 13px 14px;
+  flex-wrap: wrap;
+}
+.skeleton .sk-tag {
+  height: 11px;
+  width: 58%;
+  border-radius: 20px;
+  background: #ececf0;
+  position: relative;
+  overflow: hidden;
+}
+.skeleton .sk-tag::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 20%,
+    rgba(255,255,255,0.4) 50%,
+    transparent 80%
+  );
+  animation: skShimmer 2s ease-in-out infinite;
+  animation-delay: 0.15s;
+}
+.skeleton .sk-tag.short {
+  width: 38%;
+}
+@keyframes skShimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+@keyframes skFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Ripple Effect ───────────────────────────── */
