@@ -3,6 +3,8 @@ import { validatePassword, fetchCurrentPassword, fetchTrueRandomCacheSettings, u
 import Filters from './components/Filters'
 import MediaGrid from './components/MediaGrid'
 import FluidBackground from './effects/FluidBackground'
+import ParticleField from './effects/ParticleField'
+import CursorTrail from './effects/CursorTrail'
 
 export default function App() {
   const [modelIds, setModelIds] = useState<string[]>([])
@@ -168,6 +170,8 @@ export default function App() {
   return (
     <div className={`app-layout${locked ? ' bg-anim' : ''}`}>
       <FluidBackground />
+      <ParticleField />
+      <CursorTrail />
       {locked && (
         <div className="lock-overlay">
           <form className="lock-card" onSubmit={onSubmit}>
