@@ -113,6 +113,8 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     setPage(1)
     setHasMore(true)
     setLoading(false)
+    hasMoreRef.current = true
+    loadingRef.current = false
     fetchedKeysRef.current.clear()
     retryCountsRef.current.clear()
     if (retryTimerRef.current) {
