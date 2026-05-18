@@ -274,6 +274,8 @@ body {
 }
 
 .chip, .tag-chip {
+  position: relative;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -311,6 +313,16 @@ body {
   color: var(--danger);
 }
 
+.chip-ripple {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(139,92,246,0.4) 0%, transparent 70%);
+  transform: translate(-50%, -50%) scale(0);
+  animation: chipRipple 0.7s var(--ease-out);
+  z-index: 0;
+}
+
 /* ── Group Header ────────────────────────────── */
 .group-header {
   display: flex;
@@ -335,6 +347,20 @@ body {
   letter-spacing: -0.01em;
   color: var(--text);
 }
+
+/* ── Page Load Progress Bar ──────────────────── */
+.page-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  z-index: 9999;
+  background: var(--gradient-accent);
+  transition: width 0.3s var(--ease-out), opacity 0.4s var(--ease-out);
+  border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 12px rgba(139,92,246,0.4);
+}
+.page-progress.done { opacity: 0; transition: opacity 0.6s var(--ease-out); }
 
 /* ── Main Content Shell ──────────────────────── */
 .app-main-shell {
@@ -589,8 +615,9 @@ body {
 .card.tilt:hover { transition: transform 0.08s linear; }
 
 .card-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-bg), var(--shadow-md);
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 3px rgba(139,92,246,0.25), var(--shadow-md);
+  animation: selectedBreathe 2s ease-in-out infinite;
 }
 
 /* Card Cover (image container) */
@@ -851,6 +878,27 @@ body {
   pointer-events: none;
   z-index: 5;
 }
+
+/* Like particle burst */
+.like-particle {
+  position: absolute;
+  right: 18px;
+  top: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: particleBurst 550ms ease-out forwards;
+  pointer-events: none;
+  z-index: 5;
+}
+.like-particle.p0 { --tx: 0; --ty: -36px; }
+.like-particle.p1 { --tx: 28px; --ty: -22px; }
+.like-particle.p2 { --tx: 36px; --ty: 6px; }
+.like-particle.p3 { --tx: 18px; --ty: 30px; }
+.like-particle.p4 { --tx: -18px; --ty: 30px; }
+.like-particle.p5 { --tx: -36px; --ty: 6px; }
+.like-particle.p6 { --tx: -28px; --ty: -22px; }
 
 /* ── Pill (lightbox, general) ────────────────── */
 .pill {
@@ -1364,6 +1412,7 @@ body {
 /* ── Back to Top Button ──────────────────────── */
 .back-to-top {
   position: fixed;
+  overflow: visible;
   right: 24px;
   bottom: 24px;
   width: 52px;
@@ -1384,12 +1433,25 @@ body {
   transition: opacity 0.3s var(--ease), transform 0.3s var(--ease-spring), box-shadow 0.3s var(--ease);
   z-index: 99;
 }
+.back-to-top::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: var(--gradient-accent);
+  opacity: 0;
+  transition: opacity 0.3s var(--ease);
+  animation: ringSpin 3s linear infinite;
+  z-index: -1;
+}
+.back-to-top.show::after { opacity: 0.7; }
 .back-to-top.show { opacity: 1; transform: translateY(0) scale(1); }
 .back-to-top:hover {
   transform: translateY(-2px) scale(1.04);
   box-shadow: var(--shadow-xl);
   color: var(--accent);
 }
+.back-to-top:hover::after { opacity: 1; }
 
 /* ── Empty State ─────────────────────────────── */
 .empty-state-panel {
@@ -1736,6 +1798,24 @@ select:focus-visible {
   0% { transform: translateY(0); }
   50% { transform: translateY(-3px); }
   100% { transform: translateY(0); }
+}
+
+@keyframes selectedBreathe {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(139,92,246,0.25), var(--shadow-md); }
+  50% { box-shadow: 0 0 0 6px rgba(139,92,246,0.12), 0 0 24px rgba(139,92,246,0.15), var(--shadow-md); }
+}
+
+@keyframes chipRipple {
+  to { transform: translate(-50%, -50%) scale(4); opacity: 0; }
+}
+
+@keyframes particleBurst {
+  0% { opacity: 1; transform: translate(0, 0) scale(1); }
+  100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0); }
+}
+
+@keyframes ringSpin {
+  to { transform: rotate(360deg); }
 }
 
 /* ── Gradient Scrollbar ──────────────────────── */

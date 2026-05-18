@@ -32,6 +32,7 @@ export default function App() {
     return y * 10000 + m * 100 + day
   })
   const [showTop, setShowTop] = useState(false)
+  const [pageProgress, setPageProgress] = useState({ width: 0, done: false })
   const idleTimerRef = useRef<number | null>(null)
   const settingsHintTimerRef = useRef<number | null>(null)
   const loadTrueRandomSettings = async () => {
@@ -49,6 +50,12 @@ export default function App() {
   useEffect(() => {
     const onScroll = () => {
       setShowTop(window.scrollY > 600)
+      // Sidebar color shift with scroll
+      const sidebar = document.querySelector('.app-sidebar-shell') as HTMLElement | null
+      if (sidebar) {
+        const progress = Math.min(window.scrollY / 800, 1)
+        sidebar.style.background = `rgba(255,255,255,${0.72 + progress * 0.12})`
+      }
     }
     window.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -167,8 +174,21 @@ export default function App() {
     })()
   }, [locked])
 
+  // Page load progress simulation
+  useEffect(() => {
+    if (locked) return
+    let w = 0
+    const timer = setInterval(() => {
+      w += (100 - w) * 0.25
+      if (w > 99) { w = 100; clearInterval(timer); setPageProgress({ width: 100, done: true }) }
+      else setPageProgress({ width: w, done: false })
+    }, 100)
+    return () => clearInterval(timer)
+  }, [locked])
+
   return (
     <div className={`app-layout${locked ? ' bg-anim' : ''}`}>
+      {!locked && <div className={`page-progress${pageProgress.done ? ' done' : ''}`} style={{ width: `${pageProgress.width}%` }} />}
       <FluidBackground />
       <ParticleField />
       <CursorTrail />
