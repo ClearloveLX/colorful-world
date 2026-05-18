@@ -620,15 +620,38 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
             ))}
           </div>
         ))}
-        {loading && items.length === 0 && (
-          Array.from({ length: 10 }).map((_, i) => (
-            <div key={`sk-${i}`} className="skeleton">
-              <div className="block" />
-              <div className="line" />
-              <div className="line" />
+        {(loading || !initialLoadedRef.current) && items.length === 0 && (() => {
+          const ratios = [0.67, 1.0, 1.33, 0.75, 1.5, 0.56, 1.2, 0.8, 2.0, 1.0, 0.7, 1.25, 0.55, 1.1, 1.6, 0.85, 1.4, 0.62, 1.8, 0.9, 1.15, 0.72, 1.55, 0.95]
+          const skeletons = Array.from({ length: 24 }, (_, i) => ({
+            id: `sk-${i}`,
+            h: Math.round(280 * ratios[i]),
+          }))
+          const cc = Math.max(1, colCount)
+          const skCols: Array<Array<{ id: string; h: number }>> = Array.from({ length: cc }, () => [])
+          const skHeights = Array.from({ length: cc }, () => 0)
+          const gap = 16
+          const base = 53
+          for (const sk of skeletons) {
+            let minCol = 0
+            for (let c = 1; c < cc; c++) { if (skHeights[c] < skHeights[minCol]) minCol = c }
+            skCols[minCol].push(sk)
+            skHeights[minCol] += sk.h + base + gap
+          }
+          return skCols.map((col, ci) => (
+            <div className="col" key={`sk-col-${ci}`}>
+              {col.map(sk => (
+                <div key={sk.id} className="skeleton" style={{ '--sk-h': `${sk.h}px` } as React.CSSProperties}>
+                  <div className="sk-thumb" />
+                  <div className="sk-meta">
+                    <div className="sk-tag" />
+                    <div className="sk-tag short" />
+                    <div className="sk-tag short" />
+                  </div>
+                </div>
+              ))}
             </div>
           ))
-        )}
+        })()}
       </div>
       {selectRect && (
         <div
@@ -636,7 +659,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           style={{ left: selectRect.left, top: selectRect.top, width: selectRect.width, height: selectRect.height }}
         />
       )}
-      {!loading && items.length === 0 && (
+      {!loading && items.length === 0 && initialLoadedRef.current && (
         <div className="empty-state-panel">
           <div className="empty-state-title">暂无内容</div>
         </div>
