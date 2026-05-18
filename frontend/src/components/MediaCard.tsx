@@ -316,7 +316,15 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
             <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:18, height:18 }}>👍</span>
           </button>
           {flyKey && (
-            <span key={flyKey} className="like-fly">+1</span>
+            <>
+              <span key={`fp0-${flyKey}`} className="like-particle p0" />
+              <span key={`fp1-${flyKey}`} className="like-particle p1" />
+              <span key={`fp2-${flyKey}`} className="like-particle p2" />
+              <span key={`fp3-${flyKey}`} className="like-particle p3" />
+              <span key={`fp4-${flyKey}`} className="like-particle p4" />
+              <span key={`fp5-${flyKey}`} className="like-particle p5" />
+              <span key={`fp6-${flyKey}`} className="like-particle p6" />
+            </>
           )}
           <button
             className={`pill pill-dark clickable dislike-btn${disliking ? ' disabled' : ''}`}
