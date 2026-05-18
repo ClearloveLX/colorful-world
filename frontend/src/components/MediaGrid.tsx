@@ -566,8 +566,9 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         }}
       >
         {items.length > 0 && columns.map((col, ci) => (
-          <div className="col" key={`col-${ci}`}>
-            {col.map(({ item, idx }) => (
+          <div className="col" key={`col-${ci}`} style={{ ['--col-index' as any]: ci }}>
+            {col.map(({ item, idx }, ri) => (
+              <div key={item.id} style={{ ['--row-index' as any]: ri }}>
               <MediaCard
                 key={item.id}
                 item={item}
@@ -613,6 +614,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
                   })
                 }}
               />
+              </div>
             ))}
           </div>
         ))}

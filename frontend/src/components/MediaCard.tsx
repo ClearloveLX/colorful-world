@@ -68,12 +68,20 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
       const r = el.getBoundingClientRect()
       const x = e.clientX - r.left
       const y = e.clientY - r.top
-      const rx = ((y / r.height) - 0.5) * -6
-      const ry = ((x / r.width) - 0.5) * 6
-      el.style.transform = `perspective(600px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(0)`
+      const rx = ((y / r.height) - 0.5) * -10
+      const ry = ((x / r.width) - 0.5) * 12
+      el.style.transform = `perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(4px)`
+      // Image layer reverse parallax
+      const img = el.querySelector('.img-parallax') as HTMLElement | null
+      if (img) {
+        const ix = ((x / r.width) - 0.5) * 8
+        const iy = ((y / r.height) - 0.5) * 6
+        img.style.transform = `translate(${ix}px, ${iy}px) scale(1.03)`
+      }
+      // Beam tracking
       const beam = beamRef.current
       if (beam) {
-        const tx = Math.max(0, Math.min(r.width, x)) - r.width * 0.2
+        const tx = Math.max(0, Math.min(r.width, x)) - r.width * 0.15
         beam.style.transform = `translate(${tx}px, -10%) rotate(-12deg)`
       }
     })
@@ -85,6 +93,8 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
     }
     if (cardRef.current) cardRef.current.style.transform = ''
     if (beamRef.current) beamRef.current.style.transform = ''
+    const img = cardRef.current?.querySelector('.img-parallax') as HTMLElement | null
+    if (img) img.style.transform = ''
   }
   const onClick = (e: React.MouseEvent) => {
     if (selectable) {
@@ -233,7 +243,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
           alt={item.title}
           loading="lazy"
           decoding="async"
-          className={imgLoaded && inView ? 'img-loaded img-fade' : 'img-loading'}
+          className={`img-parallax${imgLoaded && inView ? ' img-loaded img-fade' : ' img-loading'}`}
           style={{ height: aspect ? '100%' as const : 'auto' }}
           onLoad={() => { setImgFailed(false); setImgLoaded(true) }}
           onError={() => {
