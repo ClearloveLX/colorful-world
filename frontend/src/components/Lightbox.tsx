@@ -34,7 +34,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
     setTimeout(() => {
       setClosing(false)
       onClose()
-    }, 280)
+    }, 310)
   }, [onClose])
 
   useEffect(() => {
@@ -47,7 +47,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
   }, [open])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') handleClose()
       else if (e.key === 'ArrowLeft' && onPrev) onPrev()
       else if (e.key === 'ArrowRight' && onNext) onNext()
     }
@@ -71,7 +71,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
         onClick={e => { e.stopPropagation(); if (canPrev && onPrev) onPrev() }}
         aria-label="上一项"
       >◀</button>
-      <div className="lightbox-body anim-in" onClick={e => { if (e.target === e.currentTarget) onClose(); e.stopPropagation() }}>
+      <div className="lightbox-body anim-in" onClick={e => { if (e.target === e.currentTarget) handleClose(); e.stopPropagation() }}>
         {leftAside}
         <div className={`lightbox-media${flipDir === 'in' ? ' flip-in' : ''}${flipDir === 'out' ? ' flip-out' : ''}`}>{children}</div>
         {rightAside}
