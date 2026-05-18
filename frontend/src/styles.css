@@ -885,16 +885,17 @@ body {
 .lightbox-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.55);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   display: grid;
   place-items: center;
   z-index: 100;
-  animation: fadeIn 0.25s var(--ease-out);
+  animation: lightboxReveal 0.4s var(--ease-spring);
 }
-.lightbox-backdrop.blur { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
-.lightbox-backdrop[role="dialog"] { cursor: zoom-out; }
+.lightbox-backdrop.closing {
+  animation: lightboxHide 0.3s var(--ease-in) forwards;
+}
 
 .lightbox-close {
   position: fixed;
@@ -935,6 +936,13 @@ body {
   cursor: default;
 }
 .lightbox-body.anim-in { animation: lightboxEnter 0.3s var(--ease-spring); }
+
+.lightbox-media.flip-in {
+  animation: flipEnter 0.35s var(--ease-spring);
+}
+.lightbox-media.flip-out {
+  animation: flipExit 0.25s var(--ease-in);
+}
 
 .lightbox-media {
   display: grid;
@@ -1680,6 +1688,22 @@ select:focus-visible {
 @keyframes lightboxEnter {
   from { opacity: 0; transform: scale(0.94); }
   to { opacity: 1; transform: scale(1); }
+}
+@keyframes lightboxReveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lightboxHide {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes flipEnter {
+  from { opacity: 0; transform: perspective(800px) rotateY(12deg) scale(0.94); }
+  to { opacity: 1; transform: perspective(800px) rotateY(0deg) scale(1); }
+}
+@keyframes flipExit {
+  from { opacity: 1; transform: perspective(800px) rotateY(0deg) scale(1); }
+  to { opacity: 0; transform: perspective(800px) rotateY(-10deg) scale(0.95); }
 }
 
 @keyframes shimmer {
