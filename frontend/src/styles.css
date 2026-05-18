@@ -23,13 +23,17 @@
   --text-secondary: #86868b;
   --text-tertiary: #aeaeb2;
 
-  /* Accent (Apple Blue) */
-  --accent: #007AFF;
-  --accent-hover: #0066d6;
-  --accent-pressed: #0055b3;
-  --accent-bg: rgba(0,122,255,0.08);
-  --accent-bg-hover: rgba(0,122,255,0.14);
-  --accent-border: rgba(0,122,255,0.25);
+  /* Accent — Multi-color Spectrum */
+  --accent-purple: #8B5CF6;
+  --accent-blue: #3B82F6;
+  --accent-cyan: #06B6D4;
+  --accent-pink: #EC4899;
+  --accent: var(--accent-blue);
+  --accent-hover: #2563eb;
+  --accent-pressed: #1d4ed8;
+  --accent-bg: rgba(59,130,246,0.08);
+  --accent-bg-hover: rgba(59,130,246,0.14);
+  --accent-border: rgba(59,130,246,0.25);
 
   /* Semantic */
   --danger: #ff3b30;
@@ -37,6 +41,23 @@
   --success: #34c759;
   --success-bg: rgba(52,199,89,0.08);
   --warn: #ff9500;
+
+  /* Glass enhanced */
+  --glass-stronger: rgba(255,255,255,0.88);
+  --glass-blur-strong: saturate(200%) blur(24px) brightness(1.05);
+
+  /* Neon Glow */
+  --glow-purple: 0 0 20px rgba(139,92,246,0.3), 0 0 60px rgba(139,92,246,0.1);
+  --glow-blue: 0 0 20px rgba(59,130,246,0.3), 0 0 60px rgba(59,130,246,0.1);
+  --glow-cyan: 0 0 20px rgba(6,182,212,0.3), 0 0 60px rgba(6,182,212,0.1);
+  --glow-pink: 0 0 20px rgba(236,72,153,0.3), 0 0 60px rgba(236,72,153,0.1);
+
+  /* Card hover shadow (purple-tinted) */
+  --shadow-card-hover: 0 8px 32px rgba(139,92,246,0.12), 0 2px 8px rgba(99,102,241,0.08), 0 0 0 1px rgba(139,92,246,0.08);
+
+  /* Gradient accent for borders */
+  --gradient-accent: linear-gradient(135deg, var(--accent-purple), var(--accent-blue), var(--accent-cyan), var(--accent-pink));
+  --gradient-accent-h: linear-gradient(180deg, var(--accent-purple), var(--accent-blue), var(--accent-cyan));
 
   /* Shadows — Apple-style layered */
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.03);
@@ -79,22 +100,37 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* ── Animated Background Blobs ───────────────── */
-.bg-anim:before, .bg-anim:after {
+/* ── Animated Background Blobs (multi-color) ─── */
+.bg-anim:before, .bg-anim:after, .bg-anim .bg-blob-3 {
   content: "";
   position: fixed;
-  inset: -20vmax auto auto -20vmax;
-  width: 60vmax;
-  height: 60vmax;
-  background: radial-gradient(closest-side, rgba(0,122,255,0.14), transparent 68%);
-  filter: blur(50px);
-  animation: blob 20s ease-in-out infinite;
+  border-radius: 50%;
   pointer-events: none;
+  z-index: -1;
+}
+.bg-anim:before {
+  inset: -30vmax auto auto -20vmax;
+  width: 70vmax;
+  height: 70vmax;
+  background: radial-gradient(closest-side, rgba(139,92,246,0.18), transparent 68%);
+  filter: blur(60px);
+  animation: blobA 18s ease-in-out infinite;
 }
 .bg-anim:after {
-  inset: auto -20vmax -20vmax auto;
-  background: radial-gradient(closest-side, rgba(0,122,255,0.10), transparent 68%);
-  animation-delay: 10s;
+  inset: auto -25vmax -25vmax auto;
+  width: 65vmax;
+  height: 65vmax;
+  background: radial-gradient(closest-side, rgba(6,182,212,0.15), transparent 68%);
+  filter: blur(55px);
+  animation: blobB 22s ease-in-out infinite;
+}
+.bg-anim .bg-blob-3 {
+  inset: 40vh auto auto 40vw;
+  width: 55vmax;
+  height: 55vmax;
+  background: radial-gradient(closest-side, rgba(236,72,153,0.12), transparent 68%);
+  filter: blur(50px);
+  animation: blobC 20s ease-in-out infinite;
 }
 .app-layout.bg-anim { position: relative; }
 
@@ -1575,9 +1611,21 @@ select:focus-visible {
    Animations
    ═══════════════════════════════════════════════ */
 
-@keyframes blob {
+@keyframes blobA {
   0% { transform: translate(0,0) scale(1); }
-  50% { transform: translate(8vmax,-5vmax) scale(1.12); }
+  33% { transform: translate(12vmax,-6vmax) scale(1.15); }
+  66% { transform: translate(-4vmax,8vmax) scale(0.92); }
+  100% { transform: translate(0,0) scale(1); }
+}
+@keyframes blobB {
+  0% { transform: translate(0,0) scale(1); }
+  33% { transform: translate(-8vmax,-4vmax) scale(1.1); }
+  66% { transform: translate(6vmax,8vmax) scale(0.95); }
+  100% { transform: translate(0,0) scale(1); }
+}
+@keyframes blobC {
+  0% { transform: translate(0,0) scale(1); }
+  50% { transform: translate(-6vmax,10vmax) scale(1.08); }
   100% { transform: translate(0,0) scale(1); }
 }
 
@@ -1636,6 +1684,23 @@ select:focus-visible {
   0% { transform: translateY(0); }
   50% { transform: translateY(-3px); }
   100% { transform: translateY(0); }
+}
+
+/* ── Gradient Scrollbar ──────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track {
+  background: rgba(0,0,0,0.03);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--accent-purple), var(--accent-blue), var(--accent-cyan));
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--accent-blue), var(--accent-cyan), var(--accent-pink));
+  background-clip: content-box;
 }
 
 /* ── Responsive ──────────────────────────────── */
