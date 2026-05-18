@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { validatePassword, fetchCurrentPassword, fetchTrueRandomCacheSettings, updateTrueRandomCacheSettings, clearTrueRandomCache } from './api'
 import Filters from './components/Filters'
 import MediaGrid from './components/MediaGrid'
+import FluidBackground from './effects/FluidBackground'
 
 export default function App() {
   const [modelIds, setModelIds] = useState<string[]>([])
@@ -166,6 +167,7 @@ export default function App() {
 
   return (
     <div className={`app-layout${locked ? ' bg-anim' : ''}`}>
+      <FluidBackground />
       {locked && (
         <div className="lock-overlay">
           <form className="lock-card" onSubmit={onSubmit}>
