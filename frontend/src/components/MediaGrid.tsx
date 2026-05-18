@@ -664,7 +664,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           if (selectedIndex === null) return null
           const it = items[selectedIndex]
           if (!it) return null
-          const isVideo = it.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v'].includes(it.file_type.toLowerCase())
+          const isVideo = it.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(it.file_type.toLowerCase())
           const wh = isVideo ? `${(vMeta?.w ?? it.video_width) ?? ''}×${(vMeta?.h ?? it.video_height) ?? ''}` : `${it.image_width ?? ''}×${it.image_height ?? ''}`
           const fmtSize = (bytes?: number | null): string | null => {
             if (!bytes || bytes <= 0) return null
@@ -721,7 +721,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           const onOpenInSystem = () => { (window as any).__openInSystem(it.file_path) }
           const displayTitle = (() => {
             const t = it.title || ''
-            const m = t.match(/^(.*?)(\.(jpg|jpeg|png|gif|webp|bmp|tiff|svg|mp4|avi|mov|mkv|webm|mpeg|mpg|m4v))$/i)
+            const m = t.match(/^(.*?)(\.(jpg|jpeg|png|gif|webp|bmp|tiff|svg|mp4|avi|mov|mkv|webm|mpeg|mpg|m4v|mp3|m4a))$/i)
             return m ? m[1] : t
           })()
           return (
@@ -752,7 +752,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         {selectedIndex !== null && items[selectedIndex] && (
           (() => {
             const it = items[selectedIndex]
-            const isVideo = it.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v'].includes(it.file_type.toLowerCase())
+            const isVideo = it.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(it.file_type.toLowerCase())
             const src = it.file_path || ''
             const onMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
               const el = e.currentTarget
