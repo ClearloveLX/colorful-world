@@ -659,6 +659,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         onNext={() => setSelectedIndex(i => (i === null ? i : Math.min(items.length - 1, i + 1)))}
         canPrev={selectedIndex !== null && selectedIndex > 0}
         canNext={selectedIndex !== null && selectedIndex < items.length - 1}
+        flipKey={selectedIndex}
         leftAside={(() => {
           if (selectedIndex === null) return null
           const it = items[selectedIndex]

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 type Props = {
@@ -12,9 +12,31 @@ type Props = {
   footer?: React.ReactNode
   leftAside?: React.ReactNode
   rightAside?: React.ReactNode
+  flipKey?: string | number | null
 }
 
-export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true, canNext = true, children, footer, leftAside, rightAside }: Props) {
+export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true, canNext = true, children, footer, leftAside, rightAside, flipKey }: Props) {
+  const [closing, setClosing] = useState(false)
+  const [flipDir, setFlipDir] = useState<'in' | 'out' | null>(null)
+  const prevFlipKey = useRef(flipKey)
+
+  useEffect(() => {
+    if (flipKey !== undefined && flipKey !== null && prevFlipKey.current !== undefined && prevFlipKey.current !== null && flipKey !== prevFlipKey.current) {
+      setFlipDir('out')
+      const timer = setTimeout(() => setFlipDir('in'), 250)
+      return () => clearTimeout(timer)
+    }
+    prevFlipKey.current = flipKey
+  }, [flipKey])
+
+  const handleClose = useCallback(() => {
+    setClosing(true)
+    setTimeout(() => {
+      setClosing(false)
+      onClose()
+    }, 280)
+  }, [onClose])
+
   useEffect(() => {
     if (!open) return
     const prev = document.body.style.overflow
@@ -35,10 +57,10 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
 
   if (!open) return null
   return createPortal(
-    <div className="lightbox-backdrop blur" onClick={onClose} role="dialog" aria-modal="true" aria-label="媒体预览">
+    <div className={`lightbox-backdrop${closing ? ' closing' : ''}`} onClick={handleClose} role="dialog" aria-modal="true" aria-label="媒体预览">
       <button
-        className="lightbox-close"
-        onClick={e => { e.stopPropagation(); onClose() }}
+        className={`lightbox-close`}
+        onClick={e => { e.stopPropagation(); handleClose() }}
         aria-label="关闭预览"
         title="关闭"
       >
@@ -51,7 +73,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
       >◀</button>
       <div className="lightbox-body anim-in" onClick={e => { if (e.target === e.currentTarget) onClose(); e.stopPropagation() }}>
         {leftAside}
-        <div className="lightbox-media">{children}</div>
+        <div className={`lightbox-media${flipDir === 'in' ? ' flip-in' : ''}${flipDir === 'out' ? ' flip-out' : ''}`}>{children}</div>
         {rightAside}
         {footer}
       </div>
