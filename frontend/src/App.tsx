@@ -32,6 +32,8 @@ export default function App() {
     return y * 10000 + m * 100 + day
   })
   const [showTop, setShowTop] = useState(false)
+  const [reduceMotion, setReduceMotion] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const [pageProgress, setPageProgress] = useState({ width: 0, done: false })
   const idleTimerRef = useRef<number | null>(null)
   const settingsHintTimerRef = useRef<number | null>(null)
@@ -186,12 +188,29 @@ export default function App() {
     return () => clearInterval(timer)
   }, [locked])
 
+  // Mobile detection
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
+  // Prefers reduced motion detection
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    setReduceMotion(mq.matches)
+    const onChange = (e: MediaQueryListEvent) => setReduceMotion(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
   return (
     <div className={`app-layout${locked ? ' bg-anim' : ''}`}>
       {!locked && <div className={`page-progress${pageProgress.done ? ' done' : ''}`} style={{ width: `${pageProgress.width}%` }} />}
-      <FluidBackground />
-      <ParticleField />
-      <CursorTrail />
+      {!isMobile && !reduceMotion && <FluidBackground />}
+      {!isMobile && !reduceMotion && <ParticleField />}
+      {!isMobile && !reduceMotion && <CursorTrail />}
       {locked && (
         <div className="lock-overlay">
           <form className="lock-card" onSubmit={onSubmit}>

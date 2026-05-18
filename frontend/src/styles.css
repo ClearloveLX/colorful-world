@@ -1869,6 +1869,12 @@ select:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card, .img-fade, .lightbox-body.anim-in { animation: none; }
-  .card:hover .shine { opacity: 0.15; transform: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .bg-anim:before, .bg-anim:after, .bg-anim .bg-blob-3 { animation: none !important; }
+  .card.tilt { transition: none !important; }
+  .back-to-top::after { animation: none !important; }
 }
