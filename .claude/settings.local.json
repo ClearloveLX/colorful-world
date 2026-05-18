@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('backend/server.py', doraise=True\\); py_compile.compile\\('backend/data/database.py', doraise=True\\); py_compile.compile\\('backend/open_helper.py', doraise=True\\); print\\('All Python files compile OK'\\)\")",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/pip.exe install *)",
+      "Bash(.venv/Scripts/python.exe -c \"import backend.services.image_similarity; print\\('image_similarity OK'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('main.py syntax OK'\\)\")",
+      "Bash(python *)",
+      "Bash(pip list *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}
