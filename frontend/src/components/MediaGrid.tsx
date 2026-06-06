@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchMedia, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, fetchTags } from '../api'
+import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, fetchTags } from '../api'
 import type { MediaItem } from '../types'
 import MediaCard from './MediaCard'
 import Lightbox from './Lightbox'
@@ -19,11 +19,14 @@ type Props = {
   trueRandomCacheEnabled: boolean
   seed: number
   nameSearch?: string
+  locateRequest?: { fileId: string } | null
+  onLocateRequest?: (fileId: string) => void
+  onLocateRequestClear?: () => void
   onTagClick?: (id: string) => void
   onModelClick?: (id: string) => void
 }
 
-export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', onTagClick, onModelClick }: Props) {
+export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', locateRequest, onLocateRequest, onLocateRequestClear, onTagClick, onModelClick }: Props) {
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
@@ -64,6 +67,13 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [dragSelecting, setDragSelecting] = useState<boolean>(false)
   const [selectRect, setSelectRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
   const [requestRetryTick, setRequestRetryTick] = useState(0)
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  const [toastMsg, setToastMsg] = useState<string>('')
+  const [toastVisible, setToastVisible] = useState<boolean>(false)
+  const locateProcessingRef = useRef<boolean>(false)
+  const locateFileIdRef = useRef<string | null>(null)
+  const earliestPageRef = useRef<number>(1)
+  const [showPrevPageBtn, setShowPrevPageBtn] = useState(false)
   const manualLoadMore = selectMode && order === 'random' && randomMode === 'true_random' && trueRandomCacheEnabled
   useEffect(() => {
     ;(async () => {
@@ -117,6 +127,8 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     loadingRef.current = false
     fetchedKeysRef.current.clear()
     retryCountsRef.current.clear()
+    earliestPageRef.current = 1
+    setShowPrevPageBtn(false)
     if (retryTimerRef.current) {
       window.clearTimeout(retryTimerRef.current)
       retryTimerRef.current = null
@@ -127,6 +139,44 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     resetToFirstPage()
     setSelectedIds(new Set())
     setRefreshKey(k => k + 1)
+  }
+  const loadPreviousPage = async () => {
+    const prevPage = earliestPageRef.current - 1
+    if (prevPage < 1 || loadingRef.current) return
+    const sName = nameSearch.trim().toLowerCase()
+    const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+    setLoading(true)
+    loadingRef.current = true
+    try {
+      const res = await fetchMedia({
+        model_ids: modelIds,
+        tag_ids: tagIds,
+        exclude_tag_ids: excludeTagIds,
+        page: prevPage,
+        page_size: 30,
+        strict,
+        min_heat: minHeat,
+        max_heat: maxHeat,
+        order,
+        seed,
+        name: nameSearch,
+        edit_mode: selectMode,
+        true_random: order === 'random' && randomMode === 'true_random',
+      })
+      fetchedKeysRef.current.add(`${prevPage}|${filterSig}`)
+      setItems(prev => {
+        const seen = new Set(prev.map(i => i.id))
+        const newItems = res.items.filter(it => !seen.has(it.id))
+        return [...newItems, ...prev]
+      })
+      earliestPageRef.current = prevPage
+      if (prevPage <= 1) setShowPrevPageBtn(false)
+    } catch {
+      // 静默失败
+    } finally {
+      setLoading(false)
+      loadingRef.current = false
+    }
   }
   const applyBulkHeat = async (delta: number) => {
     const ids = Array.from(selectedIds)
@@ -363,6 +413,12 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   }, [items, colCount, colWidth])
 
   useEffect(() => {
+    if (locateRequest) {
+      // 定位进行中 — 由 locate effect 管理页码跳转，此处只更新 filterKey
+      const sName = nameSearch.trim().toLowerCase()
+      filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+      return
+    }
     resetToFirstPage()
     setReloadHint(true)
     const sName = nameSearch.trim().toLowerCase()
@@ -371,9 +427,114 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     return () => clearTimeout(t)
   }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, nameSearch, seed, refreshKey])
 
+  // 定位请求 effect — 加载目标页，前后页按需加载
+  useEffect(() => {
+    if (!locateRequest) return
+    const fileId = locateRequest.fileId
+    if (locateFileIdRef.current === fileId && locateProcessingRef.current) return // 已在处理中
+    locateFileIdRef.current = fileId
+    locateProcessingRef.current = true
+    const sName = nameSearch.trim().toLowerCase()
+    const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+    ;(async () => {
+      try {
+        const pos = await fetchFilePosition(fileId, {
+          order: order === 'random' ? 'recent' : order,
+          model_ids: modelIds,
+          tag_ids: tagIds,
+          exclude_tag_ids: excludeTagIds,
+          strict,
+          min_heat: minHeat,
+          max_heat: maxHeat,
+          name: nameSearch,
+          page_size: 30,
+        })
+        if (locateFileIdRef.current !== fileId) return
+        // 只加载目标页
+        const res = await fetchMedia({
+          model_ids: modelIds,
+          tag_ids: tagIds,
+          exclude_tag_ids: excludeTagIds,
+          page: pos.page,
+          page_size: 30,
+          strict,
+          min_heat: minHeat,
+          max_heat: maxHeat,
+          order,
+          seed,
+          name: nameSearch,
+          edit_mode: selectMode,
+          true_random: order === 'random' && randomMode === 'true_random',
+        })
+        if (locateFileIdRef.current !== fileId) return
+        // 重置状态
+        fetchedKeysRef.current.clear()
+        retryCountsRef.current.clear()
+        fetchedKeysRef.current.add(`${pos.page}|${filterSig}`)
+        earliestPageRef.current = pos.page
+        setShowPrevPageBtn(pos.page > 1)
+        setItems(res.items)
+        setPage(pos.page + 1)
+        setHasMore(res.hasMore)
+        setLoading(false)
+        hasMoreRef.current = res.hasMore
+        loadingRef.current = false
+        if (retryTimerRef.current) {
+          window.clearTimeout(retryTimerRef.current)
+          retryTimerRef.current = null
+        }
+        initialLoadedRef.current = true
+        filterKeyRef.current = filterSig
+        locateProcessingRef.current = false
+        // 高亮标记交由 items 变化后的 effect 处理
+      } catch (e: any) {
+        if (locateFileIdRef.current !== fileId) return
+        const msg = String(e?.message || e || '')
+        if (msg.includes('404') || msg.includes('不在当前筛选结果中')) {
+          setReloadHint(false)
+          // 显示错误提示
+          setItems([])
+          setPage(1)
+          setHasMore(true)
+          setLoading(false)
+          hasMoreRef.current = true
+          loadingRef.current = false
+          fetchedKeysRef.current.clear()
+          filterKeyRef.current = filterSig
+          setToastMsg('该文件不在当前筛选结果中')
+          setToastVisible(true)
+          setTimeout(() => setToastVisible(false), 3000)
+        }
+        locateProcessingRef.current = false
+        locateFileIdRef.current = null
+        onLocateRequestClear?.()
+      }
+    })()
+  }, [locateRequest])
+
+  // 定位后的滚动高亮 effect
+  useEffect(() => {
+    if (!locateFileIdRef.current) return
+    const targetId = locateFileIdRef.current
+    const found = items.find(it => it.id === targetId)
+    if (!found) return
+    // 目标文件已加载，滚动并高亮
+    const timer = setTimeout(() => {
+      const el = document.querySelector(`[data-media-id="${targetId}"]`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        setHighlightId(targetId)
+        setTimeout(() => setHighlightId(null), 3500)
+      }
+      locateFileIdRef.current = null
+      onLocateRequestClear?.()
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [items])
+
   useEffect(() => {
     const run = async () => {
-      if (!hasMoreRef.current || loadingRef.current) return
+      if (!hasMoreRef.current || loadingRef.current || locateProcessingRef.current) return
       const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
       const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
@@ -555,6 +716,20 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       {selectMode && order === 'random' && randomMode === 'true_random' && (
         <div className="toast"><div className="bubble">{trueRandomCacheEnabled ? '真随机缓存过滤已启用' : '真随机缓存过滤已关闭'}</div></div>
       )}
+      {toastVisible && (
+        <div className="toast"><div className="bubble">{toastMsg}</div></div>
+      )}
+      {showPrevPageBtn && (
+        <div style={{ textAlign: 'center', padding: '10px 0' }}>
+          <button
+            className="pill pill-accent clickable"
+            style={{ fontSize: 14, padding: '8px 24px' }}
+            onClick={() => { if (!loadingRef.current) loadPreviousPage() }}
+          >
+            加载上一页
+          </button>
+        </div>
+      )}
       <div
         className={`masonry${dragSelecting ? ' selecting' : ''}`}
         ref={gridRef}
@@ -570,11 +745,13 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         {items.length > 0 && columns.map((col, ci) => (
           <div className="col" key={`col-${ci}`} style={{ ['--col-index' as any]: ci }}>
             {col.map(({ item, idx }, ri) => (
-              <div key={item.id} style={{ ['--row-index' as any]: ri }}>
+              <div key={item.id} data-media-id={item.id} style={{ ['--row-index' as any]: ri }}>
               <MediaCard
                 key={item.id}
                 item={item}
                 onOpen={() => setSelectedIndex(idx)}
+                onLocate={onLocateRequest ? () => onLocateRequest(item.id) : undefined}
+                highlighted={highlightId === item.id}
                 onOpenSystem={async () => {
                   const s = item.file_path || ''
                   if (!s) return
@@ -760,6 +937,13 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
                   在浏览器打开原文件
                 </a>
               </div>
+              {selectMode && onLocateRequest && (
+                <div className="lightbox-row">
+                  <button className="pill pill-accent clickable" onClick={(e) => { e.stopPropagation(); setSelectedIndex(null); onLocateRequest(it.id) }}>
+                    定位到最新排序
+                  </button>
+                </div>
+              )}
               <div className="lightbox-row"><span className="muted">模特：</span>{it.models.length === 0 ? (<span className="muted">无</span>) : it.models.map(m => (
                 <button key={m.id} className="pill pill-dark clickable" onClick={() => { onModelClick && onModelClick(m.id); setSelectedIndex(null) }} title={`按模特筛选：${m.name}`}>
                   {m.name}{m.type ? ` · ${m.type}` : ''}

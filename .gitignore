@@ -142,6 +142,7 @@ cython_debug/
 
 # Project data directory (large/local files)
 data/
+!backend/data/
 
 # Node / frontend
 node_modules/

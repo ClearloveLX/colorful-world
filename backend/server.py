@@ -553,6 +553,46 @@ def head_file(path: str):
     }
     return Response(status_code=200, headers=headers, media_type=ct)
 
+@app.get("/api/media/{file_id}/position")
+def get_file_position(
+    file_id: str,
+    model_ids: Optional[str] = Query(default=None),
+    tag_ids: Optional[str] = Query(default=None),
+    exclude_tag_ids: Optional[str] = Query(default=None),
+    strict: bool = True,
+    min_heat: Optional[int] = Query(default=None),
+    max_heat: Optional[int] = Query(default=None),
+    order: Optional[str] = Query(default=None),
+    name: Optional[str] = Query(default=None),
+    page_size: int = 30,
+):
+    """返回文件在给定筛选+排序下的页码和排位"""
+    try:
+        effective_order = order or 'recent'
+        if page_size < 1:
+            raise HTTPException(status_code=400, detail="page_size 必须 >= 1")
+        mset = [s for s in (model_ids or '').split(',') if s]
+        tset = [s for s in (tag_ids or '').split(',') if s]
+        exset = [s for s in (exclude_tag_ids or '').split(',') if s]
+        rank = db.get_file_rank(
+            file_id=file_id,
+            model_ids=mset or None,
+            tag_ids=tset or None,
+            exclude_tag_ids=exset or None,
+            strict=strict,
+            min_heat=min_heat,
+            max_heat=max_heat,
+            name=name,
+            order=effective_order,
+        )
+        if rank is None:
+            raise HTTPException(status_code=404, detail="文件不在当前筛选结果中")
+        page = rank // page_size + 1
+        return {"rank": rank, "page": page, "page_size": page_size}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/media/{file_id}/like")
 def like_media(file_id: str):
     row = db.get_file_by_id(file_id)

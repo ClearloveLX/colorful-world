@@ -619,6 +619,26 @@ body {
   box-shadow: 0 0 0 3px rgba(139,92,246,0.25), var(--shadow-md);
 }
 
+/* 定位高亮脉冲动画 — 红色光圈扩散 */
+@keyframes highlightPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); border-color: rgba(239, 68, 68, 0.9); }
+  100% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); border-color: transparent; }
+}
+.card.highlight-pulse {
+  animation: highlightPulse 0.65s ease-out 5;
+  z-index: 10;
+}
+
+/* 定位按钮 hover */
+.card-locate-btn {
+  opacity: 0;
+  transition: opacity 0.2s var(--ease);
+}
+.card:hover .card-locate-btn,
+.card:focus-within .card-locate-btn {
+  opacity: 1;
+}
+
 /* Card Cover (image container) */
 .card-cover {
   position: relative;
@@ -916,6 +936,11 @@ body {
 .pill-dark {
   background: rgba(0,0,0,0.04);
   border-color: transparent;
+}
+.pill-accent {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.25);
+  color: #2563eb;
 }
 .pill.clickable {
   cursor: pointer;

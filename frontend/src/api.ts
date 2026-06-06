@@ -97,6 +97,40 @@ export type TrueRandomCacheSettings = {
   source: string
 }
 
+export type PositionQuery = {
+  order: 'recent' | 'recent_asc' | 'duration' | 'duration_asc' | 'heat' | 'heat_asc'
+  model_ids?: string[]
+  tag_ids?: string[]
+  exclude_tag_ids?: string[]
+  strict?: boolean
+  min_heat?: number
+  max_heat?: number
+  name?: string
+  page_size?: number
+}
+
+export type PositionResponse = {
+  rank: number
+  page: number
+  page_size: number
+}
+
+export async function fetchFilePosition(fileId: string, params: PositionQuery): Promise<PositionResponse> {
+  const s = q({
+    model_ids: params.model_ids?.join(',') || undefined,
+    tag_ids: params.tag_ids?.join(',') || undefined,
+    exclude_tag_ids: params.exclude_tag_ids?.join(',') || undefined,
+    strict: params.strict ?? true,
+    min_heat: params.min_heat,
+    max_heat: params.max_heat,
+    order: params.order,
+    name: (params.name ?? '').trim() || undefined,
+    page_size: params.page_size ?? 30,
+  })
+  const url = `/media/${encodeURIComponent(fileId)}/position?${s}`
+  return await getRetry<PositionResponse>(url)
+}
+
 export async function fetchMedia(params: MediaQuery, signal?: AbortSignal): Promise<MediaResponse> {
   const s = q({
     model_ids: params.model_ids?.join(',') || undefined,
