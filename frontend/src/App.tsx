@@ -23,6 +23,7 @@ export default function App() {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsHint, setSettingsHint] = useState('')
   const [editMode, setEditMode] = useState(false)
+  const [locateRequest, setLocateRequest] = useState<{ fileId: string } | null>(null)
   const [seed, setSeed] = useState<number>(() => {
     const d = new Date()
     const y = d.getFullYear()
@@ -148,6 +149,13 @@ export default function App() {
     } finally {
       setSettingsBusy(false)
     }
+  }
+  const handleLocateRequest = (fileId: string) => {
+    setOrder('recent')
+    setLocateRequest({ fileId })
+  }
+  const handleLocateRequestClear = () => {
+    setLocateRequest(null)
   }
   const onSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
@@ -277,6 +285,9 @@ export default function App() {
               trueRandomCacheEnabled={trueRandomCacheEnabled}
               nameSearch={nameSearch}
               seed={seed}
+              locateRequest={locateRequest}
+              onLocateRequest={(fileId) => handleLocateRequest(fileId)}
+              onLocateRequestClear={handleLocateRequestClear}
               onTagClick={(id) => {
                 setTagIds(prev => {
                   const s = new Set(prev)

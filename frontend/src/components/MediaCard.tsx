@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '../types'
 import { likeMedia, dislikeMedia } from '../api'
 
-type Props = { item: MediaItem; onOpen: () => void; onOpenSystem?: () => void; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
+type Props = { item: MediaItem; onOpen: () => void; onOpenSystem?: () => void; onLocate?: () => void; highlighted?: boolean; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
 type ExtraProps = { selectable?: boolean; selected?: boolean; onSelectToggle?: () => void; dragging?: boolean }
 
-export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onModelClick, selectable, selected, onSelectToggle, dragging }: Props & ExtraProps) {
+export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highlighted, onTagClick, onModelClick, selectable, selected, onSelectToggle, dragging }: Props & ExtraProps) {
   const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(item.file_type.toLowerCase())
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -229,13 +229,24 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onTagClick, onMo
     }
   }, [heat])
   return (
-    <div className={`card tilt${selected ? ' card-selected' : ''}`} ref={cardRef} data-media-id={item.id} onMouseMove={onMove} onMouseLeave={onLeave}>
+    <div className={`card tilt${selected ? ' card-selected' : ''}${highlighted ? ' highlight-pulse' : ''}`} ref={cardRef} data-media-id={item.id} onMouseMove={onMove} onMouseLeave={onLeave}>
       <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ aspectRatio: aspect }}>
         {selectable && (
           <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
             <input type="checkbox" checked={!!selected} readOnly style={{ accentColor:'#007AFF' }} />
             <span className="muted">选择</span>
           </label>
+        )}
+        {selectable && onLocate && (
+          <button
+            className="card-locate-btn"
+            style={{ position:'absolute', top:8, right:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:4, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer', color:'#007AFF' }}
+            onClick={(e) => { e.stopPropagation(); onLocate() }}
+            title="定位到最新排序"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+            <span>定位</span>
+          </button>
         )}
         {(!imgLoaded || imgFailed) && <div className="img-placeholder" />}
         <img
