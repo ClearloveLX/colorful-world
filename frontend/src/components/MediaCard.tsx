@@ -237,7 +237,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
             <span className="muted">选择</span>
           </label>
         )}
-        {selectable && onLocate && (
+        {onLocate && (
           <button
             className="card-locate-btn"
             style={{ position:'absolute', top:8, right:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:4, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer', color:'#007AFF' }}
