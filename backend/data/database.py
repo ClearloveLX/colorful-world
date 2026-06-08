@@ -34,6 +34,7 @@ class Database:
         """获取数据库连接"""
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA foreign_keys = ON')
         return conn
 
     def transaction(self):
@@ -1566,7 +1567,7 @@ class Database:
             return True
 
     def delete_file(self, file_id):
-        """删除文件记录（会自动删除关联关系）"""
+        """删除文件记录（外键 CASCADE 自动清理 file_models / file_tags 关联）"""
         with self.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM files WHERE id = ?', (file_id,))
