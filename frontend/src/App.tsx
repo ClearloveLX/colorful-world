@@ -294,6 +294,7 @@ export default function App() {
                   s.add(id)
                   return Array.from(s)
                 })
+                setExcludeTagIds(prev => prev.filter(x => x !== id))
               }}
               onModelClick={(id) => {
                 setModelIds([id])

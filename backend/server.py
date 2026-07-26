@@ -138,12 +138,12 @@ def _to_data_url(b64: Optional[str]) -> Optional[str]:
 def get_models():
     models = db.get_all_models()
     types = {t['id']: t['name'] for t in db.get_all_model_types()}
-    return [{"id": m["id"], "name": m["name"], "type": (types.get(m.get("model_type_id")) or m.get("model_type") or None), "preview_image_path": _to_data_url(m.get("preview_image_path"))} for m in models]
+    return [{"id": m["id"], "name": m["name"], "type": (types.get(m.get("model_type_id")) or m.get("model_type") or None), "preview_image_path": _to_data_url(m.get("preview_image_path")), "file_count": m.get("file_count", 0)} for m in models]
 
 @app.get("/api/tags")
 def get_tags():
     tags = db.get_tags_with_category_name(only_active=False)
-    return [{"id": t["id"], "name": t["name"], "category_name": t.get("category_name") or None} for t in tags]
+    return [{"id": t["id"], "name": t["name"], "category_name": t.get("category_name") or None, "file_count": t.get("file_count", 0)} for t in tags]
 
 class PresetPayload(BaseModel):
     name: str

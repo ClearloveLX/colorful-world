@@ -65,7 +65,10 @@ class ImageClassifierApp:
         
         # 自动下一张模式
         self.auto_next = tk.BooleanVar(value=True)
-        
+
+        # 自动保存开关（默认关闭）
+        self.auto_save_enabled = tk.BooleanVar(value=False)
+
         # 上一次选择的分类（用于保留选择）
         self.last_selected_model_id = None  # 改为单选，存储单个ID
         self.last_selected_tag_ids = []
@@ -93,7 +96,11 @@ class ImageClassifierApp:
         
         # 创建界面
         self.create_widgets()
-        
+
+        # 从数据库加载自动保存开关状态
+        self.auto_save_enabled.set(self.db.get_auto_save_enabled())
+        self._update_auto_save_btn()
+
         # 绑定键盘快捷键
         self.bind_shortcuts()
         
@@ -472,7 +479,7 @@ class ImageClassifierApp:
         # 自动下一张开关
         auto_check = ttk.Checkbutton(toolbar, text="自动下一张", variable=self.auto_next)
         auto_check.pack(side=tk.LEFT, padx=10)
-        
+
         # 源文件夹路径显示
         self.source_folder_label = ttk.Label(toolbar, text="未选择文件夹")
         self.source_folder_label.pack(side=tk.LEFT, padx=10)
@@ -658,6 +665,20 @@ class ImageClassifierApp:
         )
         save_image_button.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, ipady=5)
 
+        # 自动保存按钮
+        self.auto_save_btn = tk.Button(
+            save_button_frame,
+            text="自动保存: 关",
+            command=self._on_auto_save_btn_click,
+            bg="#9E9E9E",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            relief=tk.RAISED,
+            bd=3,
+            cursor="hand2"
+        )
+        self.auto_save_btn.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, ipady=5)
+
         # 加入黑名单按钮
         blacklist_button = tk.Button(
             save_button_frame,
@@ -830,7 +851,7 @@ class ImageClassifierApp:
     def load_image(self, image_path):
         """加载并显示预览"""
         self.current_image_path = image_path
-        
+
         try:
             if self.is_video_path(image_path):
                 self.destroy_video()
@@ -903,6 +924,8 @@ class ImageClassifierApp:
             # 预加载下一张图片
             self.root.after(80, self._preload_next_image)
             self.root.focus_set()
+            # 加载完成后尝试自动保存
+            self.root.after(100, self._try_auto_save)
 
         except Exception as e:
             messagebox.showerror("错误", f"加载预览失败: {str(e)}")
@@ -2365,25 +2388,29 @@ class ImageClassifierApp:
         if hasattr(self, 'tag_canvas'):
             self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
     
-    def save_image(self):
+    def save_image(self, silent=False):
         """保存当前图片到数据库"""
         if not self.current_image_path:
-            messagebox.showwarning("警告", "请先选择一张图片")
+            if not silent:
+                messagebox.showwarning("警告", "请先选择一张图片")
             return
-        
+
         if not os.path.exists(self.current_image_path):
-            messagebox.showerror("错误", "图片文件不存在")
+            if not silent:
+                messagebox.showerror("错误", "图片文件不存在")
             return
-        
+
         # 检查是否选择了标签和模特
         if not hasattr(self, 'model_var') or not hasattr(self, 'tag_vars'):
-            messagebox.showwarning("警告", "请先选择标签和模特")
+            if not silent:
+                messagebox.showwarning("警告", "请先选择标签和模特")
             return
-        
+
         # 获取选中的模特（单选）
         selected_model_id = self.model_var.get()
         if not selected_model_id:
-            messagebox.showwarning("警告", "请选择一个模特")
+            if not silent:
+                messagebox.showwarning("警告", "请选择一个模特")
             return
         selected_model_ids = [selected_model_id]  # 转换为列表以兼容后续代码
         
@@ -2468,14 +2495,51 @@ class ImageClassifierApp:
             
             # 在状态栏显示保存成功信息
             self.status_label.config(text=f"✓ 图片已保存！文件ID: {self.current_file_id} | 保存位置: {new_file_path}")
-            
-            # 保存成功后，刷新待处理列表并自动加载下一张图片
-            self.refresh_and_load_next()
-            
+
+            # 保存成功后，根据"自动下一张"开关决定是否加载下一张
+            if self.auto_next.get():
+                self.refresh_and_load_next()
+
         except Exception as e:
-            messagebox.showerror("错误", f"保存图片失败:\n{str(e)}")
+            if not silent:
+                messagebox.showerror("错误", f"保存图片失败:\n{str(e)}")
             self.status_label.config(text="保存图片失败")
-    
+
+    def _on_auto_save_btn_click(self):
+        """自动保存按钮点击时切换状态并持久化"""
+        enabled = not self.auto_save_enabled.get()
+        self.auto_save_enabled.set(enabled)
+        self._update_auto_save_btn()
+        self.db.set_auto_save_enabled(enabled)
+        if enabled:
+            self.status_label.config(text="自动保存已开启")
+        else:
+            self.status_label.config(text="自动保存已关闭")
+
+    def _update_auto_save_btn(self):
+        """更新自动保存按钮的外观"""
+        if self.auto_save_enabled.get():
+            self.auto_save_btn.config(text="自动保存: 开", bg="#2196F3")
+        else:
+            self.auto_save_btn.config(text="自动保存: 关", bg="#9E9E9E")
+
+    def _try_auto_save(self):
+        """加载图片后尝试自动保存（如果开关开启且条件满足）"""
+        if not self.auto_save_enabled.get():
+            return
+        model_id = self.model_var.get()
+        if not model_id:
+            return
+        has_tag = any(var.get() for var in self.tag_vars.values())
+        if not has_tag:
+            return
+        if not self.current_image_path:
+            return
+        if self.current_dialog is not None:
+            return
+        self.status_label.config(text="自动保存中...")
+        self.save_image(silent=True)
+
     def add_to_blacklist(self):
         """将当前图片加入黑名单（移动到data/bad文件夹，不写入数据库）"""
         if not self.current_image_path:
