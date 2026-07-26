@@ -55,7 +55,7 @@ export default function Filters({
   const [tags, setTags] = useState<Tag[]>([])
   const [modelSearch, setModelSearch] = useState('')
   const [tagSearch, setTagSearch] = useState('')
-  const [tagMode, setTagMode] = useState<'include' | 'exclude'>('include')
+
   const [modelOpenGroups, setModelOpenGroups] = useState<Record<string, boolean>>({})
   const [tagOpenGroups, setTagOpenGroups] = useState<Record<string, boolean>>({})
   const [sectionOpen, setSectionOpen] = useState<{ filter: boolean; order: boolean; system: boolean; name: boolean; selected: boolean; models: boolean; tags: boolean }>({ filter: true, order: true, system: true, name: true, selected: true, models: true, tags: true })
@@ -431,7 +431,7 @@ export default function Filters({
                           ) : (
                             <div style={{ width: 20, height: 20, borderRadius: '50%', background: '#999', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 12 }}>{m.name[0]}</div>
                           )}
-                          <span>{m.name}</span>
+                          <span>{m.name} <span className="file-count">({m.file_count ?? 0})</span></span>
                         </label>
                       ))}
                     </div>
@@ -461,8 +461,6 @@ export default function Filters({
           <>
             <input className="search-input" value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="搜索标签" />
             <div style={{ display:'flex', gap:8, flexWrap:'wrap', margin: '8px 0 4px' }}>
-              <button className={`tool-btn${tagMode === 'include' ? ' active' : ''}`} type="button" onClick={() => setTagMode('include')}>包含</button>
-              <button className={`tool-btn${tagMode === 'exclude' ? ' active' : ''}`} type="button" onClick={() => setTagMode('exclude')}>排除</button>
               <span className="muted">包含 {selectedTags.length} · 排除 {excludedTags.length}</span>
             </div>
             <div style={{ display: 'grid', gap: 8 }}>
@@ -484,17 +482,19 @@ export default function Filters({
                   {tagOpenGroups[group] !== false && (
                     <div className="chips" style={{ marginTop: 6 }}>
                       {list.map(t => (
-                        <label key={t.id} className={`tag-chip${selectedTags.includes(t.id) ? ' selected' : ''}${excludedTags.includes(t.id) ? ' exclude' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={tagMode === 'include' ? selectedTags.includes(t.id) : excludedTags.includes(t.id)}
-                            onChange={() => {
-                              if (tagMode === 'include') applyInclude(t.id)
-                              else applyExclude(t.id)
-                            }}
-                          />
-                          <span>{t.name}</span>
-                        </label>
+                        <span key={t.id} className={`tag-chip${selectedTags.includes(t.id) ? ' selected' : ''}${excludedTags.includes(t.id) ? ' exclude' : ''}`}>
+                          <button
+                            className={`tag-action-btn include-btn${selectedTags.includes(t.id) ? ' active' : ''}`}
+                            onClick={(e) => { e.stopPropagation(); applyInclude(t.id); }}
+                            title="包含"
+                          >+</button>
+                          <span>{t.name} <span className="file-count">({t.file_count ?? 0})</span></span>
+                          <button
+                            className={`tag-action-btn exclude-btn${excludedTags.includes(t.id) ? ' active' : ''}`}
+                            onClick={(e) => { e.stopPropagation(); applyExclude(t.id); }}
+                            title="排除"
+                          >−</button>
+                        </span>
                       ))}
                     </div>
                   )}

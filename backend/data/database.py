@@ -1008,7 +1008,14 @@ class Database:
                 raise ValueError(f"模特 '{name}' 已存在")
     
     def get_all_models(self):
-        return self._query('SELECT * FROM models ORDER BY sort_order, name')
+        return self._query('''
+            SELECT m.*, COALESCE(fm.cnt, 0) AS file_count
+            FROM models m
+            LEFT JOIN (
+                SELECT model_id, COUNT(*) AS cnt FROM file_models GROUP BY model_id
+            ) fm ON m.id = fm.model_id
+            ORDER BY m.sort_order, m.name
+        ''')
 
     def get_active_models(self):
         return self._query('SELECT * FROM models WHERE is_active = 1 ORDER BY sort_order, name')
@@ -1119,12 +1126,20 @@ class Database:
         return self._query('SELECT * FROM tags WHERE is_active = 1 ORDER BY sort_order, name')
 
     def get_tags_with_category_name(self, only_active=False):
+        base_sql = '''
+            SELECT t.*, c.name AS category_name, COALESCE(ft.cnt, 0) AS file_count
+            FROM tags t
+            LEFT JOIN tag_categories c ON t.category_id = c.id
+            LEFT JOIN (
+                SELECT tag_id, COUNT(*) AS cnt FROM file_tags GROUP BY tag_id
+            ) ft ON t.id = ft.tag_id
+        '''
         if only_active:
             return self._query(
-                'SELECT t.*, c.name AS category_name FROM tags t LEFT JOIN tag_categories c ON t.category_id = c.id WHERE t.is_active = 1 ORDER BY c.sort_order, c.name, t.sort_order, t.name'
+                base_sql + ' WHERE t.is_active = 1 ORDER BY c.sort_order, c.name, t.sort_order, t.name'
             )
         return self._query(
-            'SELECT t.*, c.name AS category_name FROM tags t LEFT JOIN tag_categories c ON t.category_id = c.id ORDER BY c.sort_order, c.name, t.sort_order, t.name'
+            base_sql + ' ORDER BY c.sort_order, c.name, t.sort_order, t.name'
         )
 
     def get_all_tags_grouped(self, only_active=False):
@@ -1974,6 +1989,16 @@ class Database:
     def set_true_random_cache_enabled(self, enabled):
         self.set_app_setting('true_random_cache_enabled', '1' if bool(enabled) else '0')
         return self.get_true_random_cache_enabled()
+
+    def get_auto_save_enabled(self):
+        """获取自动保存开关状态，默认关闭"""
+        value = str(self.get_app_setting('auto_save_enabled', '0')).strip().lower()
+        return value not in ('0', 'false', 'off', 'no')
+
+    def set_auto_save_enabled(self, enabled):
+        """设置自动保存开关状态并持久化"""
+        self.set_app_setting('auto_save_enabled', '1' if bool(enabled) else '0')
+        return self.get_auto_save_enabled()
 
     def cache_true_random_results(self, cache_key, file_ids):
         cache_value = str(cache_key or '').strip()

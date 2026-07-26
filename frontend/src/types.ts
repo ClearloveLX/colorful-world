@@ -5,12 +5,14 @@ export type Model = {
   name: string
   type?: string | null
   preview_image_path?: string | null
+  file_count?: number
 }
 
 export type Tag = {
   id: ID
   name: string
   category_name?: string | null
+  file_count?: number
 }
 
 export type MediaItem = {
