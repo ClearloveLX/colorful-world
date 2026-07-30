@@ -631,6 +631,21 @@ FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "f
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets"), html=False), name="assets")
 
+    def _resolve_frontend_dist_file(rel_path: str) -> Optional[str]:
+        normalized = (rel_path or "").strip("/\\")
+        if not normalized:
+            return None
+        candidate = os.path.abspath(os.path.join(FRONTEND_DIST, normalized))
+        try:
+            common = os.path.commonpath([FRONTEND_DIST, candidate])
+        except ValueError:
+            return None
+        if common != FRONTEND_DIST:
+            return None
+        if os.path.isfile(candidate):
+            return candidate
+        return None
+
     @app.get("/")
     def serve_root():
         try:
@@ -687,5 +702,8 @@ if os.path.isdir(FRONTEND_DIST):
         if full_path.startswith("api/"):
             from fastapi import HTTPException
             raise HTTPException(status_code=404)
+        file_path = _resolve_frontend_dist_file(full_path)
+        if file_path:
+            return FileResponse(file_path)
         index_path = os.path.join(FRONTEND_DIST, "index.html")
         return FileResponse(index_path)

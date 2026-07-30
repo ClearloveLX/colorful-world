@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { validatePassword, fetchCurrentPassword, fetchTrueRandomCacheSettings, updateTrueRandomCacheSettings, clearTrueRandomCache } from './api'
 import Filters from './components/Filters'
 import MediaGrid from './components/MediaGrid'
-import FluidBackground from './effects/FluidBackground'
-import ParticleField from './effects/ParticleField'
 
 export default function App() {
   const [modelIds, setModelIds] = useState<string[]>([])
@@ -32,8 +30,6 @@ export default function App() {
     return y * 10000 + m * 100 + day
   })
   const [showTop, setShowTop] = useState(false)
-  const [reduceMotion, setReduceMotion] = useState(false)
-  const [isMobile, setIsMobile] = useState(false)
   const [pageProgress, setPageProgress] = useState({ width: 0, done: false })
   const idleTimerRef = useRef<number | null>(null)
   const settingsHintTimerRef = useRef<number | null>(null)
@@ -52,12 +48,6 @@ export default function App() {
   useEffect(() => {
     const onScroll = () => {
       setShowTop(window.scrollY > 600)
-      // Sidebar color shift with scroll
-      const sidebar = document.querySelector('.app-sidebar-shell') as HTMLElement | null
-      if (sidebar) {
-        const progress = Math.min(window.scrollY / 800, 1)
-        sidebar.style.background = `rgba(255,255,255,${0.72 + progress * 0.12})`
-      }
     }
     window.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -195,32 +185,13 @@ export default function App() {
     return () => clearInterval(timer)
   }, [locked])
 
-  // Mobile detection
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768)
-    check()
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
-  }, [])
-
-  // Prefers reduced motion detection
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
-    setReduceMotion(mq.matches)
-    const onChange = (e: MediaQueryListEvent) => setReduceMotion(e.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-
   return (
-    <div className={`app-layout${locked ? ' bg-anim' : ''}`}>
+    <div className="app-layout">
       {!locked && <div className={`page-progress${pageProgress.done ? ' done' : ''}`} style={{ width: `${pageProgress.width}%` }} />}
-      {!isMobile && !reduceMotion && <FluidBackground />}
-      {!isMobile && !reduceMotion && <ParticleField />}
       {locked && (
         <div className="lock-overlay">
           <form className="lock-card" onSubmit={onSubmit}>
-            <div className="lock-title">访问密码</div>
+            <div className="lock-title">输入密码进入</div>
             <input
               className="lock-input"
               type="password"

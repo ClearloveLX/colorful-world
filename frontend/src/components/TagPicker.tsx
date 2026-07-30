@@ -41,7 +41,7 @@ export default function TagPicker({ open, onClose, onApply, title }: Props) {
   return (
     <div className="lightbox-backdrop" onClick={onClose}>
       <div className="lightbox-body anim-in dialog-panel tag-picker-panel" onClick={e => e.stopPropagation()}>
-        <div className="dialog-header">
+        <div className="dialog-header tag-picker-header">
           <div className="dialog-title">{title || '选择标签'}</div>
           <div className="dialog-actions">
             <button className="tool-btn primary" onClick={() => onApply(Array.from(selected))} disabled={selected.size === 0}>应用</button>
