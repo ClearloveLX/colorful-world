@@ -6,6 +6,7 @@ import Lightbox from './Lightbox'
 import VideoPlayer from './VideoPlayer'
 import TagPicker from './TagPicker'
 import BulkBar from './BulkBar'
+import { scrollWindowToTop } from '../utils/scrollToTop'
 
 type Props = {
   modelIds: string[]
@@ -27,6 +28,7 @@ type Props = {
 }
 
 export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', locateRequest, onLocateRequest, onLocateRequestClear, onTagClick, onModelClick }: Props) {
+  const PAGE_SIZE = 60
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
   const [hasMore, setHasMore] = useState(true)
@@ -118,7 +120,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     setDragSelecting(false)
     setSelectRect(null)
   }, [selectMode])
-  const resetToFirstPage = () => {
+  const resetToFirstPage = (shouldScrollToTop = false) => {
+    if (shouldScrollToTop) {
+      scrollWindowToTop()
+    }
     setItems([])
     setPage(1)
     setHasMore(true)
@@ -136,7 +141,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     initialLoadedRef.current = false
   }
   const triggerRefresh = () => {
-    resetToFirstPage()
+    resetToFirstPage(true)
     setSelectedIds(new Set())
     setRefreshKey(k => k + 1)
   }
@@ -153,7 +158,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         tag_ids: tagIds,
         exclude_tag_ids: excludeTagIds,
         page: prevPage,
-        page_size: 30,
+        page_size: PAGE_SIZE,
         strict,
         min_heat: minHeat,
         max_heat: maxHeat,
@@ -378,8 +383,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     const GAP = 16
     const MIN_COL = 260
     const TARGET_COL = 300
+    const host = el.parentElement ?? el
     const ro = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width
+      const w = Math.max(0, Math.floor(entry.contentRect.width))
+      if (!w) return
       const ideal = Math.max(1, Math.floor((w + GAP) / (TARGET_COL + GAP)))
       const cols = Math.max(1, ideal)
       const cw = Math.floor((w - GAP * (cols - 1)) / cols)
@@ -387,7 +394,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       setColCount(cols)
       setColWidth(bounded)
     })
-    ro.observe(el)
+    ro.observe(host)
     return () => ro.disconnect()
   }, [])
 
@@ -419,7 +426,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
       return
     }
-    resetToFirstPage()
+    resetToFirstPage(true)
     setReloadHint(true)
     const sName = nameSearch.trim().toLowerCase()
     filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
@@ -447,7 +454,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           min_heat: minHeat,
           max_heat: maxHeat,
           name: nameSearch,
-          page_size: 30,
+          page_size: PAGE_SIZE,
         })
         if (locateFileIdRef.current !== fileId) return
         // 只加载目标页
@@ -456,7 +463,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           tag_ids: tagIds,
           exclude_tag_ids: excludeTagIds,
           page: pos.page,
-          page_size: 30,
+          page_size: PAGE_SIZE,
           strict,
           min_heat: minHeat,
           max_heat: maxHeat,
@@ -542,7 +549,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       abortControllerRef.current?.abort()
       abortControllerRef.current = controller
       setLoading(true)
-      const applyPerModelLimit = (arr: MediaItem[], limitPerModel = 2, targetCount = 30): MediaItem[] => {
+      const applyPerModelLimit = (arr: MediaItem[], limitPerModel = 2, targetCount = PAGE_SIZE): MediaItem[] => {
         const counts = new Map<string, number>()
         const chosen: MediaItem[] = []
         const skipped: MediaItem[] = []
@@ -581,7 +588,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           tag_ids: tagIds,
           exclude_tag_ids: excludeTagIds,
           page,
-          page_size: 30,
+          page_size: PAGE_SIZE,
           strict,
           min_heat: minHeat,
           max_heat: maxHeat,
@@ -598,7 +605,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         setItems(prev => {
           const seen = new Set(prev.map(i => i.id))
           const merged = [...prev]
-          const diversified = (order === 'random' && !hasFilters) ? applyPerModelLimit(res.items, 2, 30) : res.items
+          const diversified = (order === 'random' && !hasFilters) ? applyPerModelLimit(res.items, 2, PAGE_SIZE) : res.items
           for (const it of diversified) {
             if (!seen.has(it.id)) {
               seen.add(it.id)
@@ -637,7 +644,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         retryTimerRef.current = null
       }
     }
-  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, seed, nameSearch, refreshKey, selectMode, requestRetryTick])
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch, refreshKey, selectMode, requestRetryTick])
 
   useEffect(() => {
     if (manualLoadMore) return

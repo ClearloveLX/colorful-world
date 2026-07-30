@@ -2071,10 +2071,10 @@ class Database:
                          ')')
             params.extend([q, q, q])
         if min_heat is not None:
-            where.append('COALESCE(f.heat_value, 0) >= ?')
+            where.append('f.heat_value >= ?')
             params.append(int(min_heat))
         if max_heat is not None:
-            where.append('COALESCE(f.heat_value, 0) <= ?')
+            where.append('f.heat_value <= ?')
             params.append(int(max_heat))
         if mids:
             if strict:
@@ -2237,10 +2237,10 @@ class Database:
                          ')')
             params.extend([q, q, q])
         if min_heat is not None:
-            where.append('COALESCE(f.heat_value, 0) >= ?')
+            where.append('f.heat_value >= ?')
             params.append(int(min_heat))
         if max_heat is not None:
-            where.append('COALESCE(f.heat_value, 0) <= ?')
+            where.append('f.heat_value <= ?')
             params.append(int(max_heat))
         if mids:
             if strict:

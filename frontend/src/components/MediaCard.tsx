@@ -9,15 +9,12 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
   const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(item.file_type.toLowerCase())
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
-  const tiltFrameRef = useRef<number | null>(null)
   const [ripple, setRipple] = useState<{x:number;y:number;key:number}|null>(null)
   const [imgLoaded, setImgLoaded] = useState(false)
   const [inView, setInView] = useState(false)
-  const beamRef = useRef<HTMLDivElement | null>(null)
   const [imgSrc, setImgSrc] = useState<string>(cover)
   const [triedFallback, setTriedFallback] = useState<boolean>(false)
   const [imgFailed, setImgFailed] = useState<boolean>(false)
-  const [beam, setBeam] = useState<string>('')
   const [sizeOverride, setSizeOverride] = useState<number | null>(null)
   const clickTimerRef = useRef<number | null>(null)
   const [heat, setHeat] = useState<number>(Number(item.heat_value ?? 0))
@@ -57,44 +54,6 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     const pad = (n: number) => String(n).padStart(2, '0')
     if (h > 0) return `${h}时${pad(m)}分${pad(s)}秒`
     return `${m}分${pad(s)}秒`
-  }
-  const onMove = (e: React.MouseEvent) => {
-    if (dragging) return
-    const el = cardRef.current
-    if (!el) return
-    if (tiltFrameRef.current) return
-    tiltFrameRef.current = requestAnimationFrame(() => {
-      tiltFrameRef.current = null
-      const r = el.getBoundingClientRect()
-      const x = e.clientX - r.left
-      const y = e.clientY - r.top
-      const rx = ((y / r.height) - 0.5) * -20
-      const ry = ((x / r.width) - 0.5) * 24
-      el.style.transform = `perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg) translateZ(4px)`
-      // Image layer reverse parallax
-      const img = el.querySelector('.img-parallax') as HTMLElement | null
-      if (img) {
-        const ix = ((x / r.width) - 0.5) * 16
-        const iy = ((y / r.height) - 0.5) * 12
-        img.style.transform = `translate(${ix}px, ${iy}px) scale(1.03)`
-      }
-      // Beam tracking
-      const beam = beamRef.current
-      if (beam) {
-        const tx = Math.max(0, Math.min(r.width, x)) - r.width * 0.15
-        beam.style.transform = `translate(${tx}px, -10%) rotate(-12deg)`
-      }
-    })
-  }
-  const onLeave = () => {
-    if (tiltFrameRef.current) {
-      cancelAnimationFrame(tiltFrameRef.current)
-      tiltFrameRef.current = null
-    }
-    if (cardRef.current) cardRef.current.style.transform = ''
-    if (beamRef.current) beamRef.current.style.transform = ''
-    const img = cardRef.current?.querySelector('.img-parallax') as HTMLElement | null
-    if (img) img.style.transform = ''
   }
   const onClick = (e: React.MouseEvent) => {
     if (selectable) {
@@ -229,18 +188,17 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     }
   }, [heat])
   return (
-    <div className={`card tilt${selected ? ' card-selected' : ''}${highlighted ? ' highlight-pulse' : ''}`} ref={cardRef} data-media-id={item.id} onMouseMove={onMove} onMouseLeave={onLeave}>
+    <div className={`card${selected ? ' card-selected' : ''}${highlighted ? ' highlight-pulse' : ''}`} ref={cardRef} data-media-id={item.id}>
       <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ aspectRatio: aspect }}>
         {selectable && (
-          <label style={{ position:'absolute', top:8, left:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:6, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer' }} onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
-            <input type="checkbox" checked={!!selected} readOnly style={{ accentColor:'#007AFF' }} />
+          <label className="card-select-toggle" onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
+            <input type="checkbox" checked={!!selected} readOnly className="card-select-checkbox" />
             <span className="muted">选择</span>
           </label>
         )}
         {onLocate && (
           <button
             className="card-locate-btn"
-            style={{ position:'absolute', top:8, right:8, zIndex:5, display:'inline-flex', alignItems:'center', gap:4, background:'rgba(255,255,255,0.84)', backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)', padding:'5px 10px', borderRadius:20, border:'1px solid rgba(0,0,0,0.06)', fontSize:12, fontWeight:500, cursor:'pointer', color:'#007AFF' }}
             onClick={(e) => { e.stopPropagation(); onLocate() }}
             title="定位到最新排序"
           >
@@ -254,7 +212,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
           alt={item.title}
           loading="lazy"
           decoding="async"
-          className={`img-parallax${imgLoaded && inView ? ' img-loaded img-fade' : ' img-loading'}`}
+          className={imgLoaded && inView ? 'img-loaded img-fade' : 'img-loading'}
           style={{ height: aspect ? '100%' as const : 'auto' }}
           onLoad={() => { setImgFailed(false); setImgLoaded(true) }}
           onError={() => {
@@ -266,8 +224,6 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
             }
           }}
         />
-        <div className="shine" />
-        <div className="hover-beam" ref={beamRef} />
 
         {ripple && <span className="ripple" style={{ left: ripple.x, top: ripple.y, width: 120, height: 120 }} />}
         {isVideo && (
@@ -300,7 +256,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
             </button>
           ))}
         </div>
-        <div className="meta" style={{ marginTop: 4 }}>
+        <div className="meta card-meta-row">
           {(() => {
             const size = fmtSize(sizeOverride ?? item.file_size)
             const dur = isVideo ? fmtDurZh(item.duration_ms) : null
@@ -308,7 +264,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
             return text ? (<span className="card-tag">{text}</span>) : null
           })()}
         </div>
-        <div className="meta" style={{ marginTop: 4, display:'flex', gap:8, alignItems:'center', position:'relative' }}>
+        <div className="meta card-actions-row">
           <span className="card-tag heat-pill" title={`好感度：${heat}`}>
             <span className="heat-icon" aria-hidden>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="#ef4444" xmlns="http://www.w3.org/2000/svg">
@@ -369,7 +325,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
           )}
         </div>
         {item.tags.length > 0 && (
-          <div className="meta" style={{ marginTop: 4 }}>
+          <div className="meta card-meta-row">
             {item.tags.map(t => (
               <button
                 key={t.id}
