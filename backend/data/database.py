@@ -1131,7 +1131,13 @@ class Database:
             FROM tags t
             LEFT JOIN tag_categories c ON t.category_id = c.id
             LEFT JOIN (
-                SELECT tag_id, COUNT(*) AS cnt FROM file_tags GROUP BY tag_id
+                SELECT tag_id, COUNT(DISTINCT file_id) AS cnt FROM (
+                    SELECT tag_id, file_id FROM file_tags
+                    UNION
+                    SELECT mt.tag_id, fm.file_id
+                    FROM model_tags mt
+                    JOIN file_models fm ON fm.model_id = mt.model_id
+                ) GROUP BY tag_id
             ) ft ON t.id = ft.tag_id
         '''
         if only_active:

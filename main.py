@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 import ctypes
 import functools
+from collections import OrderedDict
 
 from backend.data.database import Database
 from backend.services.file_manager import FileManager
@@ -34,6 +35,67 @@ def _win_logical_cmp(a, b):
         return ctypes.windll.Shlwapi.StrCmpLogicalW(str(a), str(b))
     except Exception:
         return (a > b) - (a < b)
+
+
+def build_video_preview_images(frame_img, display_size=(170, 110), full_max_width=1024):
+    """Prepare both UI-sized preview and save-sized preview from a frame."""
+    full_img = frame_img.copy() if hasattr(frame_img, "copy") else frame_img
+    if full_img.mode not in ("RGB", "RGBA"):
+        full_img = full_img.convert("RGB")
+    if full_img.width > full_max_width:
+        scale = full_max_width / float(full_img.width)
+        resized_w = max(1, int(full_img.width * scale))
+        resized_h = max(1, int(full_img.height * scale))
+        full_img = full_img.resize((resized_w, resized_h), Image.Resampling.LANCZOS)
+    display_img = full_img.copy()
+    display_img.thumbnail(display_size, Image.Resampling.LANCZOS)
+    return display_img, full_img
+
+
+def build_video_preview_cache_key(path, start_pct, end_pct, count, mode):
+    try:
+        mtime = os.path.getmtime(path) if path and os.path.exists(path) else None
+    except Exception:
+        mtime = None
+    return (
+        os.path.abspath(path) if path else "",
+        mtime,
+        int(start_pct),
+        int(end_pct),
+        int(count),
+        str(mode or "").strip(),
+    )
+
+
+class VideoPreviewCache:
+    def __init__(self, max_entries=8):
+        self.max_entries = max(1, int(max_entries))
+        self._store = OrderedDict()
+
+    def get(self, key):
+        if key not in self._store:
+            return None
+        value = self._store.pop(key)
+        self._store[key] = value
+        return value
+
+    def set(self, key, value):
+        if key in self._store:
+            self._store.pop(key)
+        self._store[key] = value
+        while len(self._store) > self.max_entries:
+            self._store.popitem(last=False)
+
+    def clear(self):
+        self._store.clear()
+
+
+def get_video_processor_toolbar_layout():
+    """将视频工具栏拆成两行，避免在窄窗口或高 DPI 下挤掉操作按钮。"""
+    return (
+        ("refresh", "range", "start", "end", "count", "mode"),
+        ("save", "stop", "auto_host", "status"),
+    )
 
 
 class ImageClassifierApp:
@@ -77,6 +139,7 @@ class ImageClassifierApp:
         self.image_preset_cache = {"items": [], "by_name": {}, "by_id": {}}
         self.video_preset_cache = {"items": [], "by_name": {}, "by_id": {}}
         self.video_preset_context = None
+        self.video_preview_cache = VideoPreviewCache(max_entries=8)
         
         # 跟踪打开的对话框，防止同时打开多个
         self.current_dialog = None
@@ -1574,31 +1637,43 @@ class ImageClassifierApp:
         # 预览图下方工具栏（刷新/保存）
         thumbs_toolbar = ttk.Frame(center_frame)
         thumbs_toolbar.pack(fill=tk.X, padx=5, pady=(0,5))
-        refresh_btn = ttk.Button(thumbs_toolbar, text="刷新预览图", command=refresh_thumbs)
+        toolbar_top = ttk.Frame(thumbs_toolbar)
+        toolbar_top.pack(fill=tk.X, pady=(0, 4))
+        toolbar_bottom = ttk.Frame(thumbs_toolbar)
+        toolbar_bottom.pack(fill=tk.X)
+        toolbar_rows = get_video_processor_toolbar_layout()
+        toolbar_frames = {
+            key: toolbar_top for key in toolbar_rows[0]
+        }
+        toolbar_frames.update({
+            key: toolbar_bottom for key in toolbar_rows[1]
+        })
+
+        refresh_btn = ttk.Button(toolbar_frames["refresh"], text="刷新预览图", command=refresh_thumbs)
         refresh_btn.pack(side=tk.LEFT, padx=5)
-        ttk.Label(thumbs_toolbar, text="范围(分钟)").pack(side=tk.LEFT, padx=(10,2))
+        ttk.Label(toolbar_frames["range"], text="范围(分钟)").pack(side=tk.LEFT, padx=(10,2))
         sample_range_var = tk.StringVar(value="5")
-        sample_range_combo = ttk.Combobox(thumbs_toolbar, textvariable=sample_range_var, values=["3","5","10"], width=4, state="readonly")
+        sample_range_combo = ttk.Combobox(toolbar_frames["range"], textvariable=sample_range_var, values=["3","5","10"], width=4, state="readonly")
         sample_range_combo.pack(side=tk.LEFT, padx=(0,8))
-        ttk.Label(thumbs_toolbar, text="起点%").pack(side=tk.LEFT, padx=(10,2))
+        ttk.Label(toolbar_frames["start"], text="起点%").pack(side=tk.LEFT, padx=(10,2))
         start_pct_var = tk.StringVar(value="0")
-        start_pct_combo = ttk.Combobox(thumbs_toolbar, textvariable=start_pct_var, values=["0","5","10","15","20","30","40","50","60","70","80","90"], width=4, state="readonly")
+        start_pct_combo = ttk.Combobox(toolbar_frames["start"], textvariable=start_pct_var, values=["0","5","10","15","20","30","40","50","60","70","80","90"], width=4, state="readonly")
         start_pct_combo.pack(side=tk.LEFT, padx=(0,8))
-        ttk.Label(thumbs_toolbar, text="终点%").pack(side=tk.LEFT, padx=(10,2))
+        ttk.Label(toolbar_frames["end"], text="终点%").pack(side=tk.LEFT, padx=(10,2))
         end_pct_var = tk.StringVar(value="100")
-        end_pct_combo = ttk.Combobox(thumbs_toolbar, textvariable=end_pct_var, values=["10","20","30","40","50","60","70","80","90","95","100"], width=4, state="readonly")
+        end_pct_combo = ttk.Combobox(toolbar_frames["end"], textvariable=end_pct_var, values=["10","20","30","40","50","60","70","80","90","95","100"], width=4, state="readonly")
         end_pct_combo.pack(side=tk.LEFT, padx=(0,8))
-        ttk.Label(thumbs_toolbar, text="数量").pack(side=tk.LEFT, padx=(10,2))
+        ttk.Label(toolbar_frames["count"], text="数量").pack(side=tk.LEFT, padx=(10,2))
         sample_count_var = tk.IntVar(value=18)
-        sample_count_combo = ttk.Combobox(thumbs_toolbar, textvariable=sample_count_var, values=[12,18,24,36,48,72], width=4, state="readonly")
+        sample_count_combo = ttk.Combobox(toolbar_frames["count"], textvariable=sample_count_var, values=[12,18,24,36,48,72], width=4, state="readonly")
         sample_count_combo.pack(side=tk.LEFT, padx=(0,8))
-        ttk.Label(thumbs_toolbar, text="模式").pack(side=tk.LEFT, padx=(10,2))
+        ttk.Label(toolbar_frames["mode"], text="模式").pack(side=tk.LEFT, padx=(10,2))
         sample_mode_var = tk.StringVar(value="场景")
-        sample_mode_combo = ttk.Combobox(thumbs_toolbar, textvariable=sample_mode_var, values=["均匀","场景"], width=6, state="readonly")
+        sample_mode_combo = ttk.Combobox(toolbar_frames["mode"], textvariable=sample_mode_var, values=["均匀","场景"], width=6, state="readonly")
         sample_mode_combo.pack(side=tk.LEFT, padx=(0,8))
-        save_btn = ttk.Button(thumbs_toolbar, text="保存视频与缩略图")
+        save_btn = ttk.Button(toolbar_frames["save"], text="保存视频与缩略图")
         save_btn.pack(side=tk.LEFT, padx=5)
-        stop_btn = ttk.Button(thumbs_toolbar, text="停止生成")
+        stop_btn = ttk.Button(toolbar_frames["stop"], text="停止生成")
         stop_btn.pack(side=tk.LEFT, padx=5)
         auto_host_var = tk.BooleanVar(value=False)
         def toggle_auto_host():
@@ -1608,9 +1683,9 @@ class ImageClassifierApp:
                 auto_btn.config(text=("取消托管" if v else "自动托管"))
             except Exception:
                 pass
-        auto_btn = ttk.Button(thumbs_toolbar, text="自动托管", command=toggle_auto_host)
+        auto_btn = ttk.Button(toolbar_frames["auto_host"], text="自动托管", command=toggle_auto_host)
         auto_btn.pack(side=tk.LEFT, padx=5)
-        gen_label = ttk.Label(thumbs_toolbar, text="")
+        gen_label = ttk.Label(toolbar_frames["status"], text="")
         gen_label.pack(side=tk.LEFT, padx=8)
         cancel_btn = ttk.Button(bottom_frame, text="关闭", command=on_close)
         cancel_btn.pack(side=tk.RIGHT, padx=5)
@@ -1819,6 +1894,10 @@ class ImageClassifierApp:
             fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
             if not fps or fps <= 0:
                 fps = 25.0
+            try:
+                cap.release()
+            except Exception:
+                pass
             fs = 0
             try:
                 fs = os.path.getsize(path) if os.path.exists(path) else 0
@@ -1847,6 +1926,14 @@ class ImageClassifierApp:
             except Exception:
                 desired_count = count
             desired_count = max(1, min(72, desired_count))
+            mode = (sample_mode_var.get() or "场景").strip()
+            cache_key = build_video_preview_cache_key(
+                path,
+                sp,
+                ep,
+                desired_count,
+                mode,
+            )
             try:
                 import random
                 seg_start = max(0, int(total * (sp / 100.0)))
@@ -1882,10 +1969,8 @@ class ImageClassifierApp:
             def clear_selection():
                 for tw in thumb_widgets:
                     tw['canvas'].delete('sel_border')
-            def make_thumb(idx, frame_img):
-                view_img = frame_img.copy()
-                view_img.thumbnail((canvas_w-10, canvas_h-10), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(view_img)
+            def make_thumb(idx, display_img, full_img):
+                photo = ImageTk.PhotoImage(display_img)
                 frame = tk.Frame(thumbs_inner, bd=0)
                 r = idx // cols
                 c = idx % cols
@@ -1900,17 +1985,34 @@ class ImageClassifierApp:
                     draw_selection(c)
                 c.bind('<Button-1>', on_click)
                 thumbs_photos.append(photo)
-                thumbs_images.append(frame_img)
+                thumbs_images.append(full_img)
                 thumb_widgets.append({'canvas': c})
+            cached_items = self.video_preview_cache.get(cache_key)
+            if cached_items:
+                for idx, display_img, full_img in cached_items:
+                    make_thumb(idx, display_img, full_img)
+                if thumbs_inner.winfo_children():
+                    selected_thumb_index['idx'] = 0
+                    if thumb_widgets:
+                        draw_selection(thumb_widgets[0]['canvas'])
+                try:
+                    thumbs_inner.update_idletasks()
+                    thumbs_canvas.configure(scrollregion=thumbs_canvas.bbox('all'))
+                except Exception:
+                    pass
+                gen_state["busy"] = False
+                gen_state["done"] = True
+                gen_state["received"] = len(cached_items)
+                refresh_btn.config(state=tk.NORMAL)
+                stop_btn.config(state=tk.DISABLED)
+                gen_label.config(text=f"已从缓存加载 {len(cached_items)} 张")
+                return
             gen_state["positions"] = positions
             gen_state["expected"] = len(positions)
             gen_state["q"] = queue.Queue(maxsize=min(64, max(8, gen_state["expected"])))
+            preview_results = []
             gen_label.config(text=f"生成中 0/{gen_state['expected']}")
             def finish():
-                try:
-                    cap.release()
-                except Exception:
-                    pass
                 gen_state["cap"] = None
                 gen_state["after_id"] = None
                 gen_state["busy"] = False
@@ -1926,6 +2028,8 @@ class ImageClassifierApp:
                 refresh_btn.config(state=tk.NORMAL)
                 stop_btn.config(state=tk.DISABLED)
                 gen_label.config(text="")
+                if preview_results:
+                    self.video_preview_cache.set(cache_key, list(preview_results))
                 try:
                     if auto_host_var.get() and thumbs_images:
                         vp.after(0, lambda: (auto_host_var.get() and save_btn.invoke()))
@@ -1941,7 +2045,6 @@ class ImageClassifierApp:
                             pass
                     accepted = 0
                     prev_small = None
-                    mode = (sample_mode_var.get() or "场景").strip()
                     # 阈值随数量调整
                     min_diff = 10 if gen_state["expected"] > 18 else 12
                     for i, pos in enumerate(gen_state["positions"]):
@@ -1977,7 +2080,12 @@ class ImageClassifierApp:
                                         prev_small = small
                                         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                         pil_img = Image.fromarray(rgb)
-                                        gen_state["q"].put((i, pil_img))
+                                        display_img, full_img = build_video_preview_images(
+                                            pil_img,
+                                            display_size=(canvas_w - 10, canvas_h - 10),
+                                            full_max_width=1024,
+                                        )
+                                        gen_state["q"].put((i, display_img, full_img))
                                         accepted += 1
                                         if accepted >= gen_state["expected"]:
                                             break
@@ -1987,7 +2095,12 @@ class ImageClassifierApp:
                                         if remaining_slots > remaining_positions:
                                             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                             pil_img = Image.fromarray(rgb)
-                                            gen_state["q"].put((i, pil_img))
+                                            display_img, full_img = build_video_preview_images(
+                                                pil_img,
+                                                display_size=(canvas_w - 10, canvas_h - 10),
+                                                full_max_width=1024,
+                                            )
+                                            gen_state["q"].put((i, display_img, full_img))
                                             accepted += 1
                                             if accepted >= gen_state["expected"]:
                                                 break
@@ -1997,11 +2110,21 @@ class ImageClassifierApp:
                                     # 回退均匀
                                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                     pil_img = Image.fromarray(rgb)
-                                    gen_state["q"].put((i, pil_img))
+                                    display_img, full_img = build_video_preview_images(
+                                        pil_img,
+                                        display_size=(canvas_w - 10, canvas_h - 10),
+                                        full_max_width=1024,
+                                    )
+                                    gen_state["q"].put((i, display_img, full_img))
                             else:
                                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                                 pil_img = Image.fromarray(rgb)
-                                gen_state["q"].put((i, pil_img))
+                                display_img, full_img = build_video_preview_images(
+                                    pil_img,
+                                    display_size=(canvas_w - 10, canvas_h - 10),
+                                    full_max_width=1024,
+                                )
+                                gen_state["q"].put((i, display_img, full_img))
                         except Exception:
                             pass
                 finally:
@@ -2014,10 +2137,11 @@ class ImageClassifierApp:
                 consumed = 0
                 while consumed < 6:
                     try:
-                        i, pil_img = gen_state["q"].get_nowait()
+                        i, display_img, full_img = gen_state["q"].get_nowait()
                     except Exception:
                         break
-                    make_thumb(i, pil_img)
+                    make_thumb(i, display_img, full_img)
+                    preview_results.append((i, display_img, full_img))
                     gen_state["received"] += 1
                     consumed += 1
                 if gen_state["cancel"] or (gen_state["done"] and gen_state["q"].empty()):
