@@ -192,6 +192,33 @@ export async function bulkUpdateHeat(fileIds: string[], delta: number): Promise<
   return r.json()
 }
 
+export async function openInSystem(filePath: string): Promise<boolean> {
+  if (!filePath) return false
+  try {
+    const u = new URL(filePath, window.location.origin)
+    if (!u.pathname.startsWith('/api/file')) return false
+    const b64 = u.searchParams.get('path')
+    if (!b64) return false
+    const tryPost = async (endpoint: string): Promise<boolean> => {
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(), 1200)
+      try {
+        const r = await fetch(endpoint, { method: 'POST', signal: ac.signal })
+        return r.ok
+      } catch {
+        return false
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    // 优先走 open_helper（用户桌面会话），失败回退到 FastAPI 自身的 /api/open
+    if (await tryPost(`http://127.0.0.1:8001/open?path=${encodeURIComponent(b64)}`)) return true
+    return await tryPost(`/api/open?path=${encodeURIComponent(b64)}`)
+  } catch {
+    return false
+  }
+}
+
 export async function validatePassword(code: string): Promise<{ ok: boolean }> {
   const base = API_BASE
   const s = q({ code })

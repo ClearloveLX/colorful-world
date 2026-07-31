@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, fetchTags } from '../api'
+import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, fetchTags, openInSystem } from '../api'
 import type { MediaItem } from '../types'
 import MediaCard from './MediaCard'
 import Lightbox from './Lightbox'
@@ -457,6 +457,14 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           page_size: PAGE_SIZE,
         })
         if (locateFileIdRef.current !== fileId) return
+        // 定位期间筛选已变化 → 放弃本次定位结果，按新筛选重新加载
+        if (filterKeyRef.current !== filterSig) {
+          locateProcessingRef.current = false
+          locateFileIdRef.current = null
+          onLocateRequestClear?.()
+          resetToFirstPage()
+          return
+        }
         // 只加载目标页
         const res = await fetchMedia({
           model_ids: modelIds,
@@ -474,6 +482,14 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           true_random: order === 'random' && randomMode === 'true_random',
         })
         if (locateFileIdRef.current !== fileId) return
+        // 定位请求发出后筛选已变化 → 放弃旧结果，按新筛选重新加载
+        if (filterKeyRef.current !== filterSig) {
+          locateProcessingRef.current = false
+          locateFileIdRef.current = null
+          onLocateRequestClear?.()
+          resetToFirstPage()
+          return
+        }
         // 重置状态
         fetchedKeysRef.current.clear()
         retryCountsRef.current.clear()
@@ -499,13 +515,14 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         const msg = String(e?.message || e || '')
         if (msg.includes('404') || msg.includes('不在当前筛选结果中')) {
           setReloadHint(false)
-          // 显示错误提示
+          // 显示错误提示（置 initialLoaded 避免骨架屏永久显示）
           setItems([])
           setPage(1)
           setHasMore(true)
           setLoading(false)
           hasMoreRef.current = true
           loadingRef.current = false
+          initialLoadedRef.current = true
           fetchedKeysRef.current.clear()
           filterKeyRef.current = filterSig
           setToastMsg('该文件不在当前筛选结果中')
@@ -759,34 +776,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
                 onOpen={() => setSelectedIndex(idx)}
                 onLocate={onLocateRequest ? () => onLocateRequest(item.id) : undefined}
                 highlighted={highlightId === item.id}
-                onOpenSystem={async () => {
-                  const s = item.file_path || ''
-                  if (!s) return
-                  try {
-                    const u = new URL(s, window.location.origin)
-                    if (u.pathname.startsWith('/api/file')) {
-                      const b64 = u.searchParams.get('path')
-                      if (b64) {
-                        const tryPost = async (endpoint: string): Promise<boolean> => {
-                          const ac = new AbortController()
-                          const timer = setTimeout(() => ac.abort(), 1200)
-                          try {
-                            const r = await fetch(endpoint, { method: 'POST', signal: ac.signal })
-                            return r.ok
-                          } catch {
-                            return false
-                          } finally {
-                            clearTimeout(timer)
-                          }
-                        }
-                        const helperOk = await tryPost(`http://127.0.0.1:8001/open?path=${encodeURIComponent(b64)}`)
-                        if (helperOk) return
-                        const apiOk = await tryPost(`/api/open?path=${encodeURIComponent(b64)}`)
-                        if (apiOk) return
-                      }
-                    }
-                  } catch {}
-                }}
+                onOpenSystem={() => openInSystem(item.file_path || '')}
                 onTagClick={onTagClick}
                 onModelClick={onModelClick}
                 selectable={selectMode}
@@ -927,7 +917,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           if (selectedIndex === null) return null
           const it = items[selectedIndex]
           if (!it) return null
-          const onOpenInSystem = () => { (window as any).__openInSystem(it.file_path) }
+          const onOpenInSystem = () => { void openInSystem(it.file_path || '') }
           const displayTitle = (() => {
             const t = it.title || ''
             const m = t.match(/^(.*?)(\.(jpg|jpeg|png|gif|webp|bmp|tiff|svg|mp4|avi|mov|mkv|webm|mpeg|mpg|m4v|mp3|m4a))$/i)

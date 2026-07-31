@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Query, Request, Response
+from fastapi import FastAPI, Query, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from typing import Optional
 import logging
 import os
@@ -21,15 +21,60 @@ from pydantic import BaseModel
 
 from backend.data.database import Database
 
-app = FastAPI(title="Media Gallery API")
+# CORS 白名单：生产同源访问不经过 CORS；仅 Vite dev (5173→8000) 与同源端口需要放行
+_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+# 登录流程自身所需的端点豁免鉴权；其余全部 /api/* 必须携带有效访问码
+_AUTH_EXEMPT_PATHS = {"/api/password/validate", "/api/password/current"}
+
+def require_access(request: Request) -> None:
+    """全局 API 鉴权：优先 cookie（登录后浏览器自动携带），兼容 header / query 通道。"""
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return  # SPA 页面与前端静态资源
+    if path in _AUTH_EXEMPT_PATHS:
+        return
+    code = (
+        request.cookies.get("cw_access_code")
+        or request.headers.get("X-Access-Code")
+        or request.query_params.get("code", "")
+    )
+    if not code or not db.validate_access_password(code):
+        raise HTTPException(status_code=401, detail="invalid access code")
+
+app = FastAPI(title="Media Gallery API", dependencies=[Depends(require_access)])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Length", "Content-Range"],
 )
+
+# /api/static 只允许公开子目录，避免项目根（源码/数据库/.git）被下载
+_STATIC_ALLOWED_PREFIXES = ("data", "output", "frontend/dist", "frontend/public")
+# 白名单内仍禁止下载数据库文件（默认库位于项目 data/ 下）
+_STATIC_DENY_SUFFIXES = (".db", ".db-wal", ".db-shm", ".db.bak", ".sqlite", ".sqlite3", ".bak")
+
+@app.middleware("http")
+async def static_path_guard(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/static/"):
+        rel = path[len("/api/static/"):].lstrip("/")
+        rel_norm = os.path.normpath(rel).replace("\\", "/")
+        allowed = any(rel_norm == p or rel_norm.startswith(p + "/") for p in _STATIC_ALLOWED_PREFIXES)
+        if not allowed:
+            # middleware 中不能 raise HTTPException（不会被异常处理器捕获），直接返回响应
+            return Response(status_code=403, content=b'{"detail":"access denied"}', media_type="application/json")
+        if rel_norm.lower().endswith(_STATIC_DENY_SUFFIXES):
+            return Response(status_code=403, content=b'{"detail":"access denied"}', media_type="application/json")
+    return await call_next(request)
 
 # 以项目根目录作为静态基准，便于通过 /api/static/data/... 访问文件
 STATIC_BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -304,7 +349,7 @@ def get_media(
             for m in models:
                 all_model_ids.add(m['id'])
         model_tags_map = db.get_models_tags_batch(list(all_model_ids))
-        tag_rows = db.get_tags_with_category_name(only_active=False)
+        tag_rows = db.get_tags_with_category_name(only_active=False, with_file_count=False)
         tag_meta = { r['id']: {
             'name': r['name'],
             'category_id': r.get('category_id'),
@@ -448,16 +493,7 @@ def _open_in_system(p: str, raw_path: str) -> bool:
             return True
         except Exception:
             pass
-        try:
-            subprocess.Popen(['cmd', '/c', 'start', '', p])
-            return True
-        except Exception:
-            pass
-        try:
-            subprocess.Popen(["powershell.exe", "-NoProfile", "-Command", f'Start-Process -Verb Open -FilePath "{p}"'])
-            return True
-        except Exception:
-            pass
+        # 注意：不要用 cmd /c start 或 powershell -Command —— 文件名含 & 或 " 时可注入命令
         try:
             subprocess.Popen(["rundll32.exe", "url.dll,FileProtocolHandler", p])
             return True
@@ -506,6 +542,21 @@ def _bulk_update_heat(file_ids: List[str], delta: int):
             errors += 1
     return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
 
+_RANGE_CHUNK_SIZE = 1024 * 1024  # 1MB 分块流式，避免大文件整读进内存
+
+def _file_range_iter(f, start, end, chunk=_RANGE_CHUNK_SIZE):
+    try:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            data = f.read(min(chunk, remaining))
+            if not data:
+                break
+            remaining -= len(data)
+            yield data
+    finally:
+        f.close()
+
 @app.get("/api/file")
 def get_file(path: str, request: Request):
     p = _validate_file_path(_decode_b64_path(path))
@@ -525,17 +576,20 @@ def get_file(path: str, request: Request):
             if start > end:
                 start, end = 0, file_size - 1
             length = end - start + 1
-            with open(p, "rb") as f:
-                f.seek(start)
-                data = f.read(length)
             headers = {
                 "Content-Range": f"bytes {start}-{end}/{file_size}",
                 "Accept-Ranges": "bytes",
-                "Content-Length": str(len(data)),
+                "Content-Length": str(length),
                 "Content-Type": ct,
                 "Cache-Control": "public, max-age=3600",
             }
-            return Response(content=data, status_code=206, headers=headers, media_type=ct)
+            f = open(p, "rb")
+            return StreamingResponse(
+                _file_range_iter(f, start, end),
+                status_code=206,
+                headers=headers,
+                media_type=ct,
+            )
         except Exception:
             return FileResponse(p, media_type=ct)
     return FileResponse(p, media_type=ct)
@@ -661,9 +715,15 @@ if os.path.isdir(FRONTEND_DIST):
     # SPA 路由回退定义放在 /api 路由之后，避免截获 /api/* 请求
     
 @app.get("/api/password/validate")
-def password_validate(code: str):
+def password_validate(code: str, response: Response):
     try:
         ok = db.validate_access_password(code)
+        if ok:
+            # 登录成功后下发 cookie，浏览器对同源 /api 请求（含 <img>/<video>）自动携带
+            response.set_cookie(
+                "cw_access_code", code,
+                httponly=True, samesite="lax", path="/", max_age=86400,
+            )
         return {"ok": bool(ok)}
     except Exception:
         return {"ok": False}

@@ -105,7 +105,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({'items': result, 'hasMore': has_more})
             if path.startswith('/api/static/'):
                 rel = path[len('/api/static/'):]
-                fs_path = os.path.join(ROOT, rel)
+                fs_path = os.path.normpath(os.path.abspath(os.path.join(ROOT, rel)))
+                # 路径遍历防护：解析后的路径必须仍在 ROOT 内
+                try:
+                    if os.path.commonpath([ROOT, fs_path]) != ROOT:
+                        self.send_error(403)
+                        return
+                except ValueError:
+                    self.send_error(403)
+                    return
                 if not os.path.exists(fs_path) or not os.path.isfile(fs_path):
                     self.send_error(404)
                     return
