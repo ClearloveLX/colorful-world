@@ -10,7 +10,8 @@ class PresetDatabaseTestCase(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "test_presets.db")
-        self.db = Database(db_path=self.db_path)
+        # 禁用启动后台计数重算,避免线程持有临时 DB 句柄导致清理失败
+        self.db = Database(db_path=self.db_path, background_count_repair=False)
         self.tag_a = self.db.add_tag("标签A")
         self.tag_b = self.db.add_tag("标签B")
         self.tag_c = self.db.add_tag("标签C")

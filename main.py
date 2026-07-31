@@ -1695,7 +1695,7 @@ class ImageClassifierApp:
         thumbs_images = []
         thumb_widgets = []  # [{canvas: Canvas}]
         selected_thumb_index = {'idx': 0}
-        gen_state = {"cap": None, "positions": [], "i": 0, "cancel": False, "after_id": None, "busy": False, "q": None, "thread": None, "done": False, "expected": 0, "received": 0}
+        gen_state = {"cap": None, "positions": [], "i": 0, "cancel": False, "after_id": None, "busy": False, "q": None, "thread": None, "done": False, "expected": 0, "received": 0, "run_id": 0}
 
         def refresh_video_preset_controls():
             cache = self._load_presets('video')
@@ -1853,6 +1853,16 @@ class ImageClassifierApp:
                 refresh_video_list()
 
         def generate_thumbnails(path, count=12):
+            # 重入保护：先取消上一轮的 after 回调并通知旧 worker 退出，
+            # 避免新旧生成任务共享 gen_state 导致混帧/重复绘制
+            if gen_state.get("after_id"):
+                try:
+                    vp.after_cancel(gen_state["after_id"])
+                except Exception:
+                    pass
+                gen_state["after_id"] = None
+            if gen_state.get("busy"):
+                gen_state["cancel"] = True
             for w in thumbs_inner.winfo_children():
                 w.destroy()
             thumbs_photos.clear()
@@ -1864,6 +1874,8 @@ class ImageClassifierApp:
             gen_state["done"] = False
             gen_state["received"] = 0
             gen_state["q"] = queue.Queue(maxsize=8)
+            gen_state["run_id"] = gen_state.get("run_id", 0) + 1
+            my_run = gen_state["run_id"]
             # 音频文件无需生成缩略图，直接跳过
             try:
                 ext = os.path.splitext(path)[1].lower()
@@ -2028,7 +2040,7 @@ class ImageClassifierApp:
                 refresh_btn.config(state=tk.NORMAL)
                 stop_btn.config(state=tk.DISABLED)
                 gen_label.config(text="")
-                if preview_results:
+                if preview_results and not gen_state["cancel"]:
                     self.video_preview_cache.set(cache_key, list(preview_results))
                 try:
                     if auto_host_var.get() and thumbs_images:
@@ -2048,6 +2060,8 @@ class ImageClassifierApp:
                     # 阈值随数量调整
                     min_diff = 10 if gen_state["expected"] > 18 else 12
                     for i, pos in enumerate(gen_state["positions"]):
+                        if my_run != gen_state.get("run_id"):
+                            break  # 已被新任务取代
                         if gen_state["cancel"]:
                             break
                         local_cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
@@ -2128,22 +2142,29 @@ class ImageClassifierApp:
                         except Exception:
                             pass
                 finally:
-                    gen_state["done"] = True
+                    if my_run == gen_state.get("run_id"):
+                        gen_state["done"] = True
                     try:
                         local_cap.release()
                     except Exception:
                         pass
             def consume():
+                if my_run != gen_state.get("run_id"):
+                    return  # 已被新任务取代，放弃本轮
                 consumed = 0
                 while consumed < 6:
                     try:
                         i, display_img, full_img = gen_state["q"].get_nowait()
                     except Exception:
                         break
+                    if my_run != gen_state.get("run_id"):
+                        return
                     make_thumb(i, display_img, full_img)
                     preview_results.append((i, display_img, full_img))
                     gen_state["received"] += 1
                     consumed += 1
+                if my_run != gen_state.get("run_id"):
+                    return
                 if gen_state["cancel"] or (gen_state["done"] and gen_state["q"].empty()):
                     finish()
                     return
@@ -2192,6 +2213,8 @@ class ImageClassifierApp:
                     return
             model_id = selected_model.get()
             tag_ids = [tid for tid,var in tag_vars.items() if var.get()]
+            # 主线程读取 Tk 变量（后台线程不得访问 Tk 解释器）
+            preset_name = video_preset_var.get()
             def save_worker():
                 try:
                     file_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else None
@@ -2252,15 +2275,16 @@ class ImageClassifierApp:
                         pass
                     self.db.set_file_models(file_id, [model_id])
                     self.db.set_file_tags(file_id, tag_ids)
-                    self.last_selected_model_id = model_id
-                    current_video_preset = self._restore_current_preset_tags(
-                        'video',
-                        preset_name=video_preset_var.get(),
-                        tag_vars=tag_vars,
-                    )
-                    if not current_video_preset:
-                        self.last_selected_tag_ids = list(tag_ids)
                     def after_success():
+                        # 恢复预设标签等 Tk 变量操作必须在主线程执行
+                        current_video_preset = self._restore_current_preset_tags(
+                            'video',
+                            preset_name=preset_name,
+                            tag_vars=tag_vars,
+                        )
+                        if not current_video_preset:
+                            self.last_selected_tag_ids = list(tag_ids)
+                        self.last_selected_model_id = model_id
                         refresh_video_list()
                         if displayed_videos:
                             next_idx = sel[0]
@@ -4772,12 +4796,12 @@ class ImageClassifierApp:
             size = file_listbox.size()
             if size == 0:
                 return
-            # 可见最后一个索引
+            # 滚动到底部时加载更多（nearest() 只能取可见行号，数据超过一屏时恒不成立，改用 yview fraction）
             try:
-                last_visible = file_listbox.nearest(file_listbox.winfo_height())
+                bottom_fraction = file_listbox.yview()[1]
             except Exception:
-                last_visible = size - 1
-            if last_visible >= size - 1:
+                bottom_fraction = 0.0
+            if bottom_fraction >= 0.99:
                 page_state['loading'] = True
                 search_text = search_entry.get().strip()
                 try:

@@ -7,6 +7,33 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
 
+def _get_data_root():
+    """与 server.py 保持一致：CW_DATA_ROOT 优先，否则 L:\\data，否则项目内 data。"""
+    env = os.environ.get('CW_DATA_ROOT')
+    if env and env.strip():
+        return os.path.abspath(env.strip())
+    candidate = r"L:\data"
+    if os.path.isdir(candidate):
+        return os.path.abspath(candidate)
+    return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"))
+
+
+def _is_local_origin(headers):
+    """校验 Origin/Referer 必须来自本机页面；缺失时放行（server.py 内部调用不带 Origin）。"""
+    for name in ("Origin", "Referer"):
+        value = headers.get(name)
+        if not value:
+            continue
+        try:
+            host = urlparse(value).netloc.lower()
+        except Exception:
+            return False
+        if host.startswith("localhost") or host.startswith("127.0.0.1"):
+            continue
+        return False
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200):
         data = ('{"ok":true}' if code == 200 else '{"ok":false}').encode('utf-8')
@@ -29,6 +56,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/open":
+            # CSRF 防护：非本机来源的网页请求直接拒绝（server.py 内部调用无 Origin/Referer，放行）
+            if not _is_local_origin(self.headers):
+                self._send_json({"ok": False}, code=403)
+                return
             qs = parse_qs(parsed.query)
             b64 = (qs.get("path", [""])[0]) or ""
             try:
@@ -37,7 +68,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._send_json({"ok": False}, code=400)
                 return
-            p = os.path.normpath(p.replace("/", os.sep))
+            p = os.path.normpath(os.path.abspath(p.replace("/", os.sep)))
+            # 只允许打开媒体库（DATA_ROOT）内的文件
+            data_root = os.path.normpath(os.path.abspath(_get_data_root()))
+            if not (p.startswith(data_root + os.sep) or p == data_root):
+                self._send_json({"ok": False}, code=403)
+                return
             if not os.path.isfile(p):
                 self._send_json({"ok": False}, code=404)
                 return
@@ -56,18 +92,7 @@ class Handler(BaseHTTPRequestHandler):
                     ok = True
                 except Exception:
                     pass
-                if not ok:
-                    try:
-                        subprocess.Popen(['cmd', '/c', 'start', '', p])
-                        ok = True
-                    except Exception:
-                        pass
-                if not ok:
-                    try:
-                        subprocess.Popen(["powershell.exe", "-NoProfile", "-Command", f'Start-Process -Verb Open -FilePath "{p}"'])
-                        ok = True
-                    except Exception:
-                        pass
+                # 注意：不要用 cmd /c start 或 powershell -Command —— 文件名含 & 或 " 时可注入命令
                 if not ok:
                     try:
                         subprocess.Popen(["rundll32.exe", "url.dll,FileProtocolHandler", p])

@@ -6,6 +6,7 @@ import random
 import base64
 import json
 import secrets
+import threading
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
@@ -18,7 +19,7 @@ except Exception:
 class Database:
     """SQLite数据库管理类"""
     
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, background_count_repair=True):
         if db_path is None:
             env_db = os.environ.get('CW_DB_PATH')
             if env_db:
@@ -28,7 +29,23 @@ class Database:
         self.db_path = db_path
         # 确保数据库目录存在
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self._needs_tag_count_recalc = False
         self.init_database()
+        # 迁移新增 file_count 列后,需要全量重算一次标签计数
+        if self._needs_tag_count_recalc:
+            self.recalc_tag_file_counts()
+        # 启动兜底:后台全量重算一次,纠正任何历史漂移(幂等,不阻塞 UI)
+        if background_count_repair:
+            self._schedule_tag_count_repair()
+
+    def _schedule_tag_count_repair(self):
+        """后台线程全量重算标签计数,纠正增量遗漏/外部修改导致的漂移"""
+        def _repair():
+            try:
+                self.recalc_tag_file_counts()
+            except Exception as e:
+                print(f"[database] 标签计数后台重算失败: {e}")
+        threading.Thread(target=_repair, daemon=True).start()
     
     def get_connection(self):
         """获取数据库连接"""
@@ -118,7 +135,8 @@ class Database:
                 sort_order INTEGER DEFAULT 0,
                 category_id TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                file_count INTEGER DEFAULT 0
             )
         ''')
         
@@ -152,6 +170,9 @@ class Database:
                 cursor.execute('ALTER TABLE tags ADD COLUMN description TEXT')
             if 'category_id' not in columns:
                 cursor.execute('ALTER TABLE tags ADD COLUMN category_id TEXT')
+            if 'file_count' not in columns:
+                cursor.execute('ALTER TABLE tags ADD COLUMN file_count INTEGER DEFAULT 0')
+                self._needs_tag_count_recalc = True
         except Exception:
             pass
         
@@ -419,12 +440,56 @@ class Database:
             # 表不存在或出错，不需要迁移
             pass
     
+    def _backup_db_file(self):
+        """迁移前备份数据库文件，防止迁移中途失败导致数据损坏。"""
+        try:
+            import shutil
+            if self.db_path and os.path.isfile(self.db_path):
+                backup_path = self.db_path + '.bak'
+                shutil.copy2(self.db_path, backup_path)
+                print(f"[database] 迁移前已备份数据库 -> {backup_path}")
+        except Exception as e:
+            print(f"[database] 数据库备份失败（继续迁移）: {e}")
+
+    def _ensure_new_table_columns(self, cursor, old_table, new_table, exclude_cols=()):
+        """读取旧表实际列，给新表 ALTER TABLE 补齐缺失列，防止迁移丢列。"""
+        old_info = cursor.execute(f'PRAGMA table_info({old_table})').fetchall()
+        new_cols = [r[1] for r in cursor.execute(f'PRAGMA table_info({new_table})').fetchall()]
+        for info in old_info:
+            col, coltype = info[1], info[2]
+            if col in new_cols or col == 'id' or col in exclude_cols:
+                continue
+            cursor.execute(f'ALTER TABLE {new_table} ADD COLUMN "{col}" {coltype or "TEXT"}')
+        return [r[1] for r in old_info]
+
+    def _copy_rows_dynamic(self, cursor, old_table, new_table, exclude_cols=(), id_map=None):
+        """动态列拷贝：按旧表实际列（去掉 exclude_cols）逐行复制到新表。
+        id_map 非空时 id 替换为新 GUID 并记录 old->new 映射。"""
+        old_cols = self._ensure_new_table_columns(cursor, old_table, new_table, exclude_cols)
+        new_cols = [r[1] for r in cursor.execute(f'PRAGMA table_info({new_table})').fetchall()]
+        copy_cols = [c for c in old_cols if c in new_cols and c not in exclude_cols]
+        if not copy_cols:
+            return
+        col_sql = ', '.join(f'"{c}"' for c in copy_cols)
+        ph = ', '.join('?' for _ in copy_cols)
+        insert_sql = f'INSERT INTO {new_table} ({col_sql}) VALUES ({ph})'
+        for row in cursor.execute(f'SELECT * FROM {old_table}').fetchall():
+            if id_map is not None:
+                new_id = self._generate_guid()
+                id_map[row['id']] = new_id
+                vals = [row[c] for c in copy_cols]
+                vals[copy_cols.index('id')] = new_id
+            else:
+                vals = [row[c] for c in copy_cols]
+            cursor.execute(insert_sql, vals)
+
     def _migrate_remove_image_data(self, cursor):
         """迁移数据库：移除image_data字段，添加md5字段"""
         try:
+            self._backup_db_file()
             # 禁用外键检查（SQLite默认可能未启用，但为了安全起见）
             cursor.execute('PRAGMA foreign_keys = OFF')
-            
+
             # 创建新表（不包含image_data字段，包含md5字段）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS files_new (
@@ -437,23 +502,17 @@ class Database:
                     updated_at TEXT NOT NULL
                 )
             ''')
-            
-            # 迁移数据（不迁移image_data，md5字段为NULL）
-            cursor.execute('SELECT id, file_path, file_name, file_size, created_at, updated_at FROM files')
-            for row in cursor.fetchall():
-                cursor.execute('''
-                    INSERT INTO files_new (id, file_path, file_name, file_size, md5, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (row['id'], row['file_path'], row['file_name'], row['file_size'], 
-                      None, row['created_at'], row['updated_at']))
-            
+
+            # 动态列复制：保留旧表除 image_data 外的全部列（含 thumbnail/heat/duration 等），md5 默认 NULL
+            self._copy_rows_dynamic(cursor, 'files', 'files_new', exclude_cols=('image_data',))
+
             # 删除旧表并重命名新表
             cursor.execute('DROP TABLE files')
             cursor.execute('ALTER TABLE files_new RENAME TO files')
-            
+
             # 重新启用外键检查
             cursor.execute('PRAGMA foreign_keys = ON')
-            
+
             # 重新创建索引（如果它们不存在）
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_models_file_id ON file_models(file_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_models_model_id ON file_models(model_id)')
@@ -466,6 +525,7 @@ class Database:
     def _perform_migration(self, cursor):
         """执行数据库迁移：将INTEGER ID转换为GUID"""
         try:
+            self._backup_db_file()
             # 创建新表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS models_new (
@@ -530,47 +590,22 @@ class Database:
             model_id_map = {}  # old_id -> new_guid
             tag_id_map = {}    # old_id -> new_guid
             file_id_map = {}   # old_id -> new_guid
-            
-            # 迁移models表
+
+            # 迁移models表（动态列复制，保留 sort_order/is_active/model_type 等全部列）
             try:
-                cursor.execute('SELECT * FROM models')
-                for row in cursor.fetchall():
-                    old_id = row['id']
-                    new_id = self._generate_guid()
-                    model_id_map[old_id] = new_id
-                    cursor.execute('''
-                        INSERT INTO models_new (id, name, created_at, updated_at)
-                        VALUES (?, ?, ?, ?)
-                    ''', (new_id, row['name'], row['created_at'], row['updated_at']))
+                self._copy_rows_dynamic(cursor, 'models', 'models_new', id_map=model_id_map)
             except Exception:
                 pass  # 表可能不存在
-            
+
             # 迁移tags表
             try:
-                cursor.execute('SELECT * FROM tags')
-                for row in cursor.fetchall():
-                    old_id = row['id']
-                    new_id = self._generate_guid()
-                    tag_id_map[old_id] = new_id
-                    cursor.execute('''
-                        INSERT INTO tags_new (id, name, created_at, updated_at)
-                        VALUES (?, ?, ?, ?)
-                    ''', (new_id, row['name'], row['created_at'], row['updated_at']))
+                self._copy_rows_dynamic(cursor, 'tags', 'tags_new', id_map=tag_id_map)
             except Exception:
                 pass  # 表可能不存在
-            
+
             # 迁移files表
             try:
-                cursor.execute('SELECT * FROM files')
-                for row in cursor.fetchall():
-                    old_id = row['id']
-                    new_id = self._generate_guid()
-                    file_id_map[old_id] = new_id
-                    cursor.execute('''
-                        INSERT INTO files_new (id, file_path, file_name, file_size, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (new_id, row['file_path'], row['file_name'], row['file_size'], 
-                          row['created_at'], row['updated_at']))
+                self._copy_rows_dynamic(cursor, 'files', 'files_new', id_map=file_id_map)
             except Exception:
                 pass  # 表可能不存在
             
@@ -1097,7 +1132,9 @@ class Database:
         with self.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM models WHERE id = ?', (model_id,))
-            return True
+        # 级联删除 file_models 影响大量文件的继承标签,低频操作直接全量重算
+        self.recalc_tag_file_counts()
+        return True
     
     # ========== 标签相关操作 ==========
     
@@ -1125,21 +1162,80 @@ class Database:
     def get_active_tags(self):
         return self._query('SELECT * FROM tags WHERE is_active = 1 ORDER BY sort_order, name')
 
-    def get_tags_with_category_name(self, only_active=False):
-        base_sql = '''
-            SELECT t.*, c.name AS category_name, COALESCE(ft.cnt, 0) AS file_count
-            FROM tags t
-            LEFT JOIN tag_categories c ON t.category_id = c.id
-            LEFT JOIN (
-                SELECT tag_id, COUNT(DISTINCT file_id) AS cnt FROM (
-                    SELECT tag_id, file_id FROM file_tags
-                    UNION
-                    SELECT mt.tag_id, fm.file_id
-                    FROM model_tags mt
-                    JOIN file_models fm ON fm.model_id = mt.model_id
-                ) GROUP BY tag_id
-            ) ft ON t.id = ft.tag_id
-        '''
+    def recalc_tag_file_counts(self):
+        """全量重算所有标签的文件计数（直接关联 ∪ 通过模特继承）。
+
+        只应在低频场景调用（迁移后、删除模特后、测试），单次约几百毫秒。
+        日常计数由写路径通过 _adjust_tag_counts 增量维护。
+        """
+        with self.transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE tags SET file_count = COALESCE((
+                    SELECT COUNT(DISTINCT file_id) FROM (
+                        SELECT tag_id, file_id FROM file_tags WHERE tag_id = tags.id
+                        UNION
+                        SELECT mt.tag_id, fm.file_id
+                        FROM model_tags mt
+                        JOIN file_models fm ON fm.model_id = mt.model_id
+                        WHERE mt.tag_id = tags.id
+                    )
+                ), 0)
+            ''')
+
+    def _get_inherited_tags_for_models(self, cursor, model_ids):
+        """获取指定模特集合继承的所有标签 id（模特标签并集）"""
+        if not model_ids:
+            return set()
+        placeholders = ','.join('?' * len(model_ids))
+        cursor.execute(
+            f'SELECT DISTINCT tag_id FROM model_tags WHERE model_id IN ({placeholders})',
+            list(model_ids)
+        )
+        return {r['tag_id'] for r in cursor.fetchall()}
+
+    def _get_inherited_tags(self, cursor, file_id):
+        """获取文件通过其模特继承的所有标签 id"""
+        cursor.execute('SELECT model_id FROM file_models WHERE file_id = ?', (file_id,))
+        model_ids = [r['model_id'] for r in cursor.fetchall()]
+        return self._get_inherited_tags_for_models(cursor, model_ids)
+
+    def _adjust_tag_counts(self, cursor, old_direct, new_direct, old_inherited, new_inherited):
+        """事务内对 tags.file_count 应用单文件增量（集合差,微秒级）"""
+        old_set = set(old_direct) | set(old_inherited)
+        new_set = set(new_direct) | set(new_inherited)
+        inc = new_set - old_set
+        dec = old_set - new_set
+        if inc:
+            ph = ','.join('?' * len(inc))
+            cursor.execute(
+                f'UPDATE tags SET file_count = COALESCE(file_count, 0) + 1 WHERE id IN ({ph})',
+                list(inc)
+            )
+        if dec:
+            ph = ','.join('?' * len(dec))
+            cursor.execute(
+                f'UPDATE tags SET file_count = COALESCE(file_count, 0) - 1 WHERE id IN ({ph})',
+                list(dec)
+            )
+
+    def get_tags_with_category_name(self, only_active=False, with_file_count=True):
+        # file_count 持久化在 tags.file_count 列（写路径增量维护），
+        # 直接读列避免每次实时聚合 file_tags ∪ model_tags×file_models 的几十万行
+        if with_file_count:
+            base_sql = '''
+                SELECT t.*, c.name AS category_name, COALESCE(t.file_count, 0) AS file_count
+                FROM tags t
+                LEFT JOIN tag_categories c ON t.category_id = c.id
+            '''
+        else:
+            base_sql = '''
+                SELECT t.id, t.name, t.is_active, t.sort_order, t.category_id,
+                       t.preview_image_path, t.description, t.created_at, t.updated_at,
+                       c.name AS category_name
+                FROM tags t
+                LEFT JOIN tag_categories c ON t.category_id = c.id
+            '''
         if only_active:
             return self._query(
                 base_sql + ' WHERE t.is_active = 1 ORDER BY c.sort_order, c.name, t.sort_order, t.name'
@@ -1591,7 +1687,11 @@ class Database:
         """删除文件记录（外键 CASCADE 自动清理 file_models / file_tags 关联）"""
         with self.transaction() as conn:
             cursor = conn.cursor()
+            # 级联删除前先取关联,用于扣减标签计数
+            direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
+            inherited = self._get_inherited_tags(cursor, file_id)
             cursor.execute('DELETE FROM files WHERE id = ?', (file_id,))
+            self._adjust_tag_counts(cursor, direct, set(), inherited, set())
             return True
     
     def save_image_data(self, file_id, image_path):
@@ -1735,21 +1835,30 @@ class Database:
                 INSERT INTO file_models (id, file_id, model_id, created_at)
                 VALUES (?, ?, ?, ?)
             ''', (relation_id, file_id, model_id, now))
+            # 新增模特可能带来新的继承标签
+            old_inherited = self._get_inherited_tags(cursor, file_id)
+            old_direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
+            new_inherited = old_inherited | self._get_inherited_tags_for_models(cursor, [model_id])
+            self._adjust_tag_counts(cursor, old_direct, old_direct, old_inherited, new_inherited)
             conn.commit()
             conn.close()
             return True
         except sqlite3.IntegrityError:
             conn.close()
             return False  # 关联已存在
-    
+
     def remove_file_model(self, file_id, model_id):
         """移除文件的模特关联"""
         conn = self.get_connection()
         cursor = conn.cursor()
+        old_inherited = self._get_inherited_tags(cursor, file_id)
+        old_direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
         cursor.execute('''
-            DELETE FROM file_models 
+            DELETE FROM file_models
             WHERE file_id = ? AND model_id = ?
         ''', (file_id, model_id))
+        new_inherited = self._get_inherited_tags(cursor, file_id)
+        self._adjust_tag_counts(cursor, old_direct, old_direct, old_inherited, new_inherited)
         conn.commit()
         conn.close()
         return True
@@ -1765,6 +1874,8 @@ class Database:
         with self.transaction() as conn:
             cursor = conn.cursor()
             now = datetime.now().isoformat()
+            old_inherited = self._get_inherited_tags(cursor, file_id)
+            old_direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
             cursor.execute('DELETE FROM file_models WHERE file_id = ?', (file_id,))
             for model_id in model_ids:
                 relation_id = self._generate_guid()
@@ -1772,6 +1883,8 @@ class Database:
                     INSERT INTO file_models (id, file_id, model_id, created_at)
                     VALUES (?, ?, ?, ?)
                 ''', (relation_id, file_id, model_id, now))
+            new_inherited = self._get_inherited_tags_for_models(cursor, list(model_ids))
+            self._adjust_tag_counts(cursor, old_direct, old_direct, old_inherited, new_inherited)
             return True
     
     # ========== 文件和标签关联操作 ==========
@@ -1787,21 +1900,27 @@ class Database:
                 INSERT INTO file_tags (id, file_id, tag_id, created_at)
                 VALUES (?, ?, ?, ?)
             ''', (relation_id, file_id, tag_id, now))
+            # 该 tag 之前已通过模特继承计入时,不重复计数
+            if tag_id not in self._get_inherited_tags(cursor, file_id):
+                cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) + 1 WHERE id = ?', (tag_id,))
             conn.commit()
             conn.close()
             return True
         except sqlite3.IntegrityError:
             conn.close()
             return False  # 关联已存在
-    
+
     def remove_file_tag(self, file_id, tag_id):
         """移除文件的标签关联"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            DELETE FROM file_tags 
+            DELETE FROM file_tags
             WHERE file_id = ? AND tag_id = ?
         ''', (file_id, tag_id))
+        # 该 tag 仍通过模特继承计入时,不扣减
+        if tag_id not in self._get_inherited_tags(cursor, file_id):
+            cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) - 1 WHERE id = ?', (tag_id,))
         conn.commit()
         conn.close()
         return True
@@ -1877,6 +1996,8 @@ class Database:
         with self.transaction() as conn:
             cursor = conn.cursor()
             now = datetime.now().isoformat()
+            old_direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
+            old_inherited = self._get_inherited_tags(cursor, file_id)
             cursor.execute('DELETE FROM file_tags WHERE file_id = ?', (file_id,))
             for tag_id in tag_ids:
                 relation_id = self._generate_guid()
@@ -1884,6 +2005,8 @@ class Database:
                     INSERT INTO file_tags (id, file_id, tag_id, created_at)
                     VALUES (?, ?, ?, ?)
                 ''', (relation_id, file_id, tag_id, now))
+            # 只改直接集,继承集不变
+            self._adjust_tag_counts(cursor, old_direct, set(tag_ids), old_inherited, old_inherited)
             return True
     
     # ========== 模特和标签关联操作 ==========
@@ -1899,21 +2022,43 @@ class Database:
                 INSERT INTO model_tags (id, model_id, tag_id, created_at)
                 VALUES (?, ?, ?, ?)
             ''', (relation_id, model_id, tag_id, now))
+            # 该模特下没有直接打此标签的文件,才通过继承新增计数
+            cursor.execute('''
+                SELECT COUNT(*) AS n FROM file_models fm
+                WHERE fm.model_id = ? AND NOT EXISTS (
+                    SELECT 1 FROM file_tags ft
+                    WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+                )
+            ''', (model_id, tag_id))
+            n = cursor.fetchone()['n']
+            if n:
+                cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) + ? WHERE id = ?', (n, tag_id))
             conn.commit()
             conn.close()
             return True
         except sqlite3.IntegrityError:
             conn.close()
             return False  # 关联已存在
-    
+
     def remove_model_tag(self, model_id, tag_id):
         """移除模特的标签关联"""
         conn = self.get_connection()
         cursor = conn.cursor()
+        # 移除继承后,该模特下直接带此标签的文件仍计入(直接关联),其余不再计入
         cursor.execute('''
-            DELETE FROM model_tags 
+            SELECT COUNT(*) AS n FROM file_models fm
+            WHERE fm.model_id = ? AND NOT EXISTS (
+                SELECT 1 FROM file_tags ft
+                WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+            )
+        ''', (model_id, tag_id))
+        n = cursor.fetchone()['n']
+        cursor.execute('''
+            DELETE FROM model_tags
             WHERE model_id = ? AND tag_id = ?
         ''', (model_id, tag_id))
+        if n:
+            cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) - ? WHERE id = ?', (n, tag_id))
         conn.commit()
         conn.close()
         return True
@@ -1929,6 +2074,7 @@ class Database:
         with self.transaction() as conn:
             cursor = conn.cursor()
             now = datetime.now().isoformat()
+            old_tags = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM model_tags WHERE model_id = ?', (model_id,))}
             cursor.execute('DELETE FROM model_tags WHERE model_id = ?', (model_id,))
             for tag_id in tag_ids:
                 relation_id = self._generate_guid()
@@ -1936,6 +2082,21 @@ class Database:
                     INSERT INTO model_tags (id, model_id, tag_id, created_at)
                     VALUES (?, ?, ?, ?)
                 ''', (relation_id, model_id, tag_id, now))
+            # 增量：被移除/新增的标签对该模特下"无直接标签"的文件计数 ±1
+            removed = old_tags - set(tag_ids)
+            added = set(tag_ids) - old_tags
+            for tag_id in removed | added:
+                sign = 1 if tag_id in added else -1
+                cursor.execute('''
+                    SELECT COUNT(*) AS n FROM file_models fm
+                    WHERE fm.model_id = ? AND NOT EXISTS (
+                        SELECT 1 FROM file_tags ft
+                        WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+                    )
+                ''', (model_id, tag_id))
+                n = cursor.fetchone()['n']
+                if n:
+                    cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) + ? WHERE id = ?', (sign * n, tag_id))
             return True
     
     # ========== 文件查询相关操作 ==========

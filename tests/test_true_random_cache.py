@@ -16,6 +16,11 @@ class TrueRandomCacheTestCase(unittest.TestCase):
         self.original_db = server.db
         server.db = self.db
         self.client = TestClient(server.app)
+        # 通过 /api/password/validate 获取登录 cookie（鉴权中间件要求携带访问码）
+        self.access_code = self.db.get_current_access_password()
+        login = self.client.get(f"/api/password/validate?code={self.access_code}")
+        self.assertEqual(login.status_code, 200)
+        self.assertTrue(login.json()["ok"])
         self.file_ids = []
         for index in range(4):
             file_id = self.db.add_file(
