@@ -24,11 +24,14 @@ cd frontend && npm run dev
 # or directly:
 .\.venv\Scripts\python.exe main.py
 
-# Run all tests
+# Run all backend tests (unittest via pytest runner)
 .\.venv\Scripts\python.exe -m pytest tests/ -v
 
 # Run a single test file
 .\.venv\Scripts\python.exe -m pytest tests/test_presets.py -v
+
+# Run frontend unit tests (vitest)
+cd frontend && npm test
 
 # Audio duration backfill script
 .\.venv\Scripts\python.exe -m backend.backfill_audio_duration [limit]
@@ -48,22 +51,30 @@ cd frontend && npm run dev
 
 ## Architecture
 
-This is a **local media gallery** for browsing, filtering, and managing images/videos/audio files. It has two modes:
+This is a **local media gallery** for browsing, filtering, and managing images/videos/audio files. It has three run modes:
+
+### Three Servers
+
+| Server | Port | Technology | Purpose |
+|--------|------|------------|---------|
+| `backend/server.py` | 8000 | FastAPI + uvicorn | Primary: REST API + built frontend static files |
+| `backend/simple_server.py` | 3000 | Python stdlib `http.server` | Lightweight read-only alternative (no FastAPI needed) |
+| `backend/open_helper.py` | 8001 | Python stdlib `http.server` | Single endpoint `POST /open` — opens files in system default app |
+
+**Why two separate HTTP servers?** `open_helper.py` is launched in the user's desktop session (via `run_open_helper.ps1`) because `ShellExecuteW`/`os.startfile` requires running in the user's session. The FastAPI server may run in a different context (e.g. Windows service) and cannot directly launch GUI apps.
+
+`simple_server.py` is a minimal read-only alternative — no password, no presets, no true-random cache, no write operations, loads entire dataset into memory.
 
 ### 1. Web App (primary)
 - **Backend**: FastAPI (`backend/server.py`) on port 8000. Serves REST API + built frontend static files from `frontend/dist/`. A single process handles both.
 - **Frontend**: React 18 + TypeScript + Vite (`frontend/`). Masonry-layout media grid with collapsible sidebar filters (models, tags with categories, heat range, name search), lightbox viewer, bulk tag/heat operations in edit mode, password-gated access.
   - Entry point: `frontend/src/main.tsx` → `App.tsx`
   - Types: `frontend/src/types.ts` defines `Model`, `Tag`, `MediaItem`, `ID`
-  - API layer: `frontend/src/api.ts` — all requests use retry logic (`getRetry`, 3 attempts) with 15s timeout and `AbortController`
-  - Vite dev config (`frontend/vite.config.ts`): proxies `/api` to `localhost:8000`, strict port 5173
+  - API layer: `frontend/src/api.ts` — `getRetry()` retries 3x with 400ms delay; `get()` uses 15s AbortController timeout; `fetchMedia()` has custom retry (not `getRetry`, uses its own 600ms delay retry in `MediaGrid`)
 - **Data root**: Controlled by `CW_DATA_ROOT` env var. Defaults to `L:\data` if that drive exists, otherwise `./data`. File paths served via base64-encoded query params (`/api/file?path=...`) to support files on any drive.
-- A secondary **open helper** (`backend/open_helper.py`) runs on port 8001, launched by `start.ps1` via `run_open_helper.ps1` in the user's desktop session. It exists because opening files with GUI applications (via `ShellExecuteW`/`os.startfile`) requires running in the user's session — the FastAPI server may run in a different context and cannot directly launch GUI apps. The frontend POSTs to `localhost:8001/open?path=<b64>` to open files.
-- **`backend/simple_server.py`** is a standalone minimal HTTP API on port 3000 — a lighter alternative to the FastAPI server using only stdlib `http.server`. Shares the same `Database` class.
-- **`backend/services/face_cluster.py`** — face detection and clustering via insightface (`buffalo_l` model, CPUExecutionProvider). Provides `detect_faces()` (returns face embeddings), `cluster_faces()` (groups by cosine similarity), and `face_available()` check. Lazily initializes on first use.
-- **`backend/services/image_similarity.py`** — image similarity using three features: dHash (64-bit difference hash), HSV histogram correlation, and face embeddings. Provides `find_similar_groups()` and `find_similar_groups_safe()` (graceful degradation if insightface unavailable). Used for duplicate/near-duplicate detection.
+- **Vite dev config** (`frontend/vite.config.ts`): `strictPort: true` on 5173, proxies `/api` → `localhost:8000`.
 
-### 2. Desktop GUI (`main.py`, ~5500 lines)
+### 2. Desktop GUI (`main.py`, ~5500 lines — includes image classification UI)
 - Tkinter-based image classifier (`ImageClassifierApp`). Used for initial ingestion and tagging workflow. Shares the same `Database` and `FileManager` classes.
 - `run.bat` auto-creates venv, installs `requirements.txt`, sets `CW_DATA_ROOT` (preferring `L:\data` if it exists), then launches `main.py`.
 - The GUI has three main panels: **source folder browser** (scan directories for media), **classification workspace** (view one image at a time, assign models/tags, rate heat, copy/move to output or good folders), and **database browser** (query and edit existing records). Keyboard shortcuts drive the classification workflow for speed.
@@ -80,11 +91,40 @@ Single `Database` class in `backend/data/database.py` (~2400 lines). Core tables
 - **app_settings** — key/value store (e.g., `true_random_cache_enabled`)
 - **access_password** — rotating access code for the web frontend
 
-IDs are UUIDs (hex, no dashes). The database auto-migrates on first connection, adding missing columns and converting legacy INTEGER IDs.
+IDs are UUIDs (hex, no dashes). The database auto-migrates on every startup (`init_database()` called in `__init__`): checks for INTEGER→UUID migration, runs column-level `ALTER TABLE` additions, and historical table rebuilds (removing retired `image_data`, `recommend_value` columns).
 
 ### Tests
-- `tests/test_presets.py` — CRUD + sort_order + soft-delete tests for presets (isolated temp DB)
+- `tests/test_presets.py` — CRUD + sort_order + soft-delete tests for presets (unittest, isolated temp DB)
 - `tests/test_true_random_cache.py` — cache blacklisting behavior via FastAPI `TestClient` with temp DB injection (`server.db = self.db`)
+- `tests/test_video_preview_helpers.py` — Tkinter GUI video preview helpers (LRU cache, image resize)
+- `tests/test_video_toolbar_layout.py` — Tkinter toolbar row placement
+- `frontend/src/utils/toggleGroupOpen.test.ts` — vitest unit tests
+- `frontend/src/utils/scrollToTop.test.ts` — vitest unit tests
+- No `conftest.py` or pytest fixtures exist
+
+### Frontend State Management
+- **No router, no context, no Redux.** All state is lifted to `App.tsx` via `useState`/`useRef`, passed down as props.
+- "Routing" is done via a single `?mode=edit` URL search parameter + `popstate` events.
+- `Filters` and `MediaGrid` receive filter state + callbacks as props; `MediaGrid` passes down to `MediaCard`, `Lightbox`, `BulkBar`, `TagPicker`.
+- Key refs: `idleTimerRef`, `abortControllerRef`, `IntersectionObserver`, `ResizeObserver`, `filterKeyRef` (to discard stale responses).
+
+### CSS Architecture
+- Single file: `frontend/src/styles.css` (~2000 lines). No CSS modules, no Tailwind, no CSS-in-JS.
+- Dark theme with warm gold accent (`#b89a67`). Design tokens in `:root` block: surfaces (4 levels), borders (3), text (3), accent colors, semantic colors, shadows (6), radii (7), motion easings.
+- Naming: semantic kebab-case (`.lock-overlay`, `.card-cover`, `.bulk-bar`).
+- Responsive: 1200px (sidebar narrows), 920px (sidebar collapses to top), 640px (tight), `prefers-reduced-motion`.
+
+### Frontend Performance Patterns
+- **IntersectionObserver** for infinite scroll (sentinel div) and lazy image loading (`rootMargin: 80px`)
+- **ResizeObserver** for masonry column recalculation
+- **requestAnimationFrame** for heat animation, drag selection rect, scroll auto-scroll
+- **Stale request discarding**: `filterKeyRef` checks before applying results to prevent race conditions
+- **Optimistic updates** for like/dislike
+- **Per-model limit** in random mode (max 2 items per model per page)
+- **Video prefetching**: adjacent video files pre-fetched (first 64KB via Range request) when lightbox is open
+- **Masonry layout**: custom shortest-column algorithm via `useMemo`, no CSS Grid masonry, no third-party library
+- **Skeleton loading**: 24 placeholder cards before first page loads
+- No `React.lazy` / `Suspense` — entire app is one bundle
 
 ### Frontend Component Tree
 ```
@@ -92,35 +132,73 @@ App
 ├── Filters (sidebar: model/tag pickers, sort order, heat range, name search, system settings)
 └── MediaGrid (masonry layout, infinite scroll, bulk select mode)
     ├── MediaCard (thumbnail, models, tags, heat/like/dislike buttons, tilt/ripple effects)
-    ├── Lightbox (full-size viewer with prev/next, metadata sidebars)
-    ├── VideoPlayer (custom video element wrapper)
-    ├── TagPicker (modal for bulk tag add/remove)
+    ├── Lightbox (full-size viewer with prev/next, metadata sidebars — uses createPortal)
+    ├── VideoPlayer (custom video element wrapper — speed menu via createPortal)
+    ├── TagPicker (modal for bulk tag add/remove — uses createPortal)
     └── BulkBar (selection toolbar: add/remove tags, adjust heat, select all/clear)
 ```
 
+### Backend Data Flow (typical `/api/media` request)
+1. Parse query params via FastAPI `Query()`
+2. Build `cache_key` (MD5 of filter params) if true_random mode
+3. `db.query_files_with_filters(...)` → page of file rows
+4. Batch-fetch models (`db.get_files_models_batch()`), tags (`db.get_files_tags_batch()`), model-level tags (`db.get_models_tags_batch()`)
+5. Merge file-tags + model-inherited tags, sort by category `sort_order`
+6. Optionally cache shown file IDs via `db.cache_true_random_results()`
+7. Convert internal paths to API URLs via `_to_static_url()`
+
+The server uses a **module-level singleton** `db = Database()` — no FastAPI `Depends()` or `APIRouter`. Tests monkey-patch `server.db = self.db`.
+
+### Authentication Flow (Frontend)
+1. On first load, `locked = true` → lock screen shown
+2. Password form submits → `GET /api/password/validate?code=...`
+3. On success, `locked = false` → main app renders
+4. Password pre-fetched from `/api/password/current`, stored in `localStorage.cw_access_code`
+5. **10-minute idle lockout**: listens to mouse/keyboard/scroll/touch events; after 600s of inactivity → re-locks
+6. No JWT, no cookies, no token management on the frontend
+
+### Face Clustering & Image Similarity
+- **`backend/services/face_cluster.py`**: Uses `insightface` (`buffalo_l` model, CPU only). Lazy init — sentinel `_face_model = False` prevents retrying failed loads. `detect_faces()` returns `[{bbox, embedding}]`, `cluster_faces()` uses Union-Find with O(n^2) pairwise cosine similarity (threshold 0.45).
+- **`backend/services/image_similarity.py`**: Three-feature duplicate detection — dHash (64-bit difference hash, Hamming distance ≤10), HSV histogram correlation (≥0.85), and face embedding similarity (0.45). `find_similar_groups_safe()` wraps everything in try/except and returns `[]` on failure. Low-detail images (dHash bit_count ≤10) skip dHash comparison.
+
 ### Key API Endpoints (all under `/api/`)
-- `GET /api/media` — filtered, paginated media query with model_ids, tag_ids, exclude_tag_ids, strict/loose matching, heat range, sort order (random/duration/recent/heat), seed-based reproducible random, name search, true_random cache blacklisting
-- `GET /api/models`, `GET /api/tags`, `GET /api/model_types` — metadata
+
+**Media query:**
+- `GET /api/media` — filtered, paginated media with model_ids, tag_ids, exclude_tag_ids, strict/loose matching, heat range, sort order (random/duration/recent/heat), seed-based random, name search, true_random cache blacklisting
+- `GET /api/media/{file_id}/position` — find a file's page/rank in current filter context
 - `POST /api/media/:id/like`, `/dislike` — increment/decrement heat
-- `GET /api/file?path=<b64>` — serve any local file by base64-encoded absolute path (supports Range requests for video seeking)
-- `POST /api/files/bulk/add_tags`, `/remove_tags`, `/heat` — bulk operations
+
+**File serving:**
+- `GET /api/file?path=<b64>` — serve local file by base64-encoded path (supports Range requests for video seeking)
+- `HEAD /api/file?path=<b64>` — file metadata (Content-Length, Accept-Ranges) for video progressive download
+- `POST /api/open?path=<b64>` — open file in system app via ShellExecuteW → os.startfile → cmd → powershell → explorer
+- `GET /api/static/{path}` — static file serving from project root
+
+**Bulk operations:**
+- `POST /api/files/bulk/add_tags`, `/remove_tags` — bulk add/remove tags; returns `{updated, skipped, errors}` (not transactional)
+- `POST /api/files/bulk/heat` — bulk heat adjustment
+
+**Metadata:**
+- `GET /api/models`, `GET /api/tags`, `GET /api/model_types` — metadata with file counts
+
+**Auth & settings:**
+- `GET /api/password/validate`, `/current` — password validation and retrieval
 - `GET/PUT /api/settings/true-random-cache` — toggle cache behavior
 - `POST /api/true-random-cache/clear` — clear cache
-- `GET/POST/PUT/DELETE /api/presets/:media_type` — CRUD for saved filter presets
-- `GET /api/password/validate`, `/current` — access code management
-- `HEAD /api/file?path=<b64>` — file metadata (Content-Length, Accept-Ranges, cache headers) for video progressive download
-- `POST /api/open?path=<b64>` — open file in system default app via multi-level fallback: ShellExecuteW → os.startfile → cmd start → powershell → explorer.exe. The separate `open_helper.py` on :8001 exists for cross-session support; this endpoint handles cases where caller and server share a desktop session
-- `GET /` — serves frontend `index.html`, with password rotation on each page load (unless `CW_PASSWORD_ROTATE=0`)
-- `GET /{path}` — SPA fallback: non-API, non-file paths route to `index.html`
+
+**Presets:**
+- `GET/POST /api/presets/{media_type}` — list/create (image or video)
+- `GET/PUT/DELETE /api/presets/{media_type}/{id}` — single preset CRUD
+
+**SPA:**
+- `GET /` — serves `index.html`, with password rotation unless `CW_PASSWORD_ROTATE=0`
+- `GET /{path}` — SPA fallback to `index.html` (only when `frontend/dist/` exists)
 
 ### Startup Flow (`start.ps1`)
-1. Ensures Python venv exists, installs backend deps (fastapi, uvicorn)
+1. Ensures Python venv exists, installs backend deps (fastapi, uvicorn, etc.)
 2. Builds frontend (`npm ci`/`npm install` → `npm run build`)
 3. Launches `run_open_helper.ps1` to start `open_helper.py` on port 8001 in user session
 4. Starts FastAPI server on port 8000 (serves both API and built frontend static files)
-
-### Frontend Password Display
-- When the lock screen is shown (`locked === true`), the frontend fetches the current password from `/api/password/current` and stores it in `localStorage` under key `cw_access_code` — this allows viewing the password in browser devtools for sharing access.
 
 ### Environment Variables
 - `CW_DATA_ROOT` — media files directory (default: `L:\data` if exists, else `./data`)
@@ -129,12 +207,16 @@ App
 - `CW_PASSWORD_ROTATE` — set to `0` to disable password rotation on page load
 
 ### Dependencies
-- **Backend** (`requirements.txt`): opencv-python, Pillow, numpy, fastapi, uvicorn[standard], mutagen, insightface>=0.7.0 (face detection/clustering, uses `buffalo_l` model downloaded on first use)
-- **Frontend** (`package.json`): React 18, TypeScript 5, Vite 5 — no UI framework, all CSS is handwritten in `styles.css`
+- **Backend** (`requirements.txt`): opencv-python>=4.8.0, Pillow>=10.0.0, numpy>=1.24.0, fastapi>=0.115.0, uvicorn[standard]>=0.32.0, mutagen>=1.47.0, insightface>=0.7.0
+  - `insightface` downloads `buffalo_l` model (~500MB) on first use
+  - `mutagen` for mp3/m4a audio duration extraction
+- **Frontend** (`package.json`): React 18, TypeScript 5, Vite 5 — no UI framework, no state management library, no CSS framework. Dev deps: `@types/react`, `@types/react-dom`, `@vitejs/plugin-react`, `typescript`, `vite`, `vitest`
 
 ### Scripts & Tools
 - **`start.ps1`** — one-click launcher (see Commands). Also references `run_open_helper.ps1` and `run_server.ps1`.
-- **`start.cmd`** — lightweight CMD launcher, alternative to `start.ps1`.
+- **`start.cmd`** — thin CMD wrapper around `start.ps1`.
+- **`run_server.ps1`** — parametric uvicorn launcher with configurable port, bind, workers, optional frontend build.
+- **`run_open_helper.ps1`** — launches `open_helper.py` as a subprocess in user session.
 - **`install-startup-shortcut.ps1`** — creates a Windows startup shortcut so the server auto-launches on login.
 - **`install-winservice.ps1` / `uninstall-winservice.ps1`** — install/uninstall as a Windows service via NSSM (`tools/nssm/nssm.exe`).
 - **`安装依赖.bat`** — Chinese-language helper to install Python + npm dependencies.
