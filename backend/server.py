@@ -14,6 +14,8 @@ import subprocess
 import urllib.request
 import urllib.parse
 import ctypes
+import shutil
+from datetime import datetime
 
 logger = logging.getLogger("colorfulworld")
 from typing import List
@@ -544,6 +546,49 @@ def _bulk_update_heat(file_ids: List[str], delta: int):
             errors += 1
     return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
 
+def _bulk_blacklist(file_ids: List[str]):
+    """批量加入黑名单：移动到 DATA_ROOT/bad + 删除数据库记录。
+
+    文件缺失时仍删记录（记录已无意义）；move 失败时不删记录。
+    路径必须落在 DATA_ROOT 内（防御 DB 路径被污染时移动任意路径）。
+    """
+    updated = 0
+    skipped = 0
+    errors = 0
+    root = os.path.abspath(DATA_ROOT)
+    for fid in (file_ids or []):
+        try:
+            row = db.get_file_by_id(fid)
+            if not row:
+                skipped += 1
+                continue
+            file_path = row.get('file_path') or ''
+            if not file_path:
+                skipped += 1
+                continue
+            ap = os.path.abspath(file_path)
+            try:
+                if os.path.commonpath([root, ap]) != root:
+                    errors += 1
+                    continue
+            except ValueError:
+                errors += 1
+                continue
+            if os.path.isfile(ap):
+                bad_folder = os.path.join(root, "bad")
+                os.makedirs(bad_folder, exist_ok=True)
+                target = os.path.join(bad_folder, os.path.basename(ap))
+                if os.path.exists(target):
+                    name, ext = os.path.splitext(os.path.basename(ap))
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    target = os.path.join(bad_folder, f"{name}_{timestamp}{ext}")
+                shutil.move(ap, target)
+            db.delete_file(fid)
+            updated += 1
+        except Exception:
+            errors += 1
+    return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
+
 _RANGE_CHUNK_SIZE = 1024 * 1024  # 1MB 分块流式，避免大文件整读进内存
 
 def _file_range_iter(f, start, end, chunk=_RANGE_CHUNK_SIZE):
@@ -758,6 +803,13 @@ def bulk_remove_tags(payload: BulkTagOp):
 def bulk_update_heat(payload: BulkHeatOp):
     delta = 1 if payload.delta >= 0 else -1
     return _bulk_update_heat(payload.file_ids, delta)
+
+class BulkBlacklistOp(BaseModel):
+    file_ids: List[str]
+
+@app.post("/api/files/bulk/blacklist")
+def bulk_blacklist(payload: BulkBlacklistOp):
+    return _bulk_blacklist(payload.file_ids)
 if os.path.isdir(FRONTEND_DIST):
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str):
