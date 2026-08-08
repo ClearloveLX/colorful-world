@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, fetchTags, openInSystem } from '../api'
+import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, bulkBlacklist, fetchTags, openInSystem } from '../api'
 import type { MediaItem } from '../types'
 import MediaCard from './MediaCard'
 import Lightbox from './Lightbox'
@@ -200,6 +200,24 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       // 失败时保持原状
     } finally {
       setHeatBusy(false)
+    }
+  }
+  const applyBulkBlacklist = async () => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!window.confirm(`将 ${ids.length} 个文件移入黑名单并删除记录？此操作不可撤销。`)) return
+    try {
+      const r = await bulkBlacklist(ids)
+      setSelectedIds(new Set())
+      const msg = `已加入黑名单 ${r.updated} 个` + (r.skipped > 0 ? `，跳过 ${r.skipped} 个` : '') + (r.errors > 0 ? `，失败 ${r.errors} 个` : '')
+      setToastMsg(msg)
+      setToastVisible(true)
+      setTimeout(() => setToastVisible(false), 3000)
+      triggerRefresh()
+    } catch {
+      setToastMsg('批量删除失败，请稍后重试')
+      setToastVisible(true)
+      setTimeout(() => setToastVisible(false), 3000)
     }
   }
   useEffect(() => {
@@ -717,6 +735,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           onRemoveTags={() => setPickerOpen({ type:'remove' })}
           onIncreaseHeat={() => { void applyBulkHeat(1) }}
           onDecreaseHeat={() => { void applyBulkHeat(-1) }}
+          onBlacklist={() => { void applyBulkBlacklist() }}
           onRefresh={() => triggerRefresh()}
           onSelectAll={() => {
             try {
