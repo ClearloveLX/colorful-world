@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { fetchModels, fetchTags } from '../api'
 import type { Model, Tag } from '../types'
 import { toggleGroupOpen } from '../utils/toggleGroupOpen'
+import { CARD_WIDTH_MAX, CARD_WIDTH_MIN, CARD_WIDTH_STEP } from '../utils/cardWidth'
 
 type Props = {
   selectedModels: string[]
@@ -26,6 +27,9 @@ type Props = {
   settingsHint: string
   onToggleTrueRandomCache: (enabled: boolean) => void
   onClearTrueRandomCache: () => void
+  cardWidth: number
+  onCardWidthChange: (width: number) => void
+  onCardWidthSave: (width: number) => void
 }
 
 export default function Filters({
@@ -51,6 +55,9 @@ export default function Filters({
   settingsHint,
   onToggleTrueRandomCache,
   onClearTrueRandomCache,
+  cardWidth,
+  onCardWidthChange,
+  onCardWidthSave,
 }: Props) {
   const [models, setModels] = useState<Model[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -506,6 +513,26 @@ export default function Filters({
                   {trueRandomCacheEnabled ? '缓存过滤已启用' : '缓存过滤已停用'}
                 </span>
                 <span className="cache-state-pill">已缓存 {trueRandomCacheCount} 条</span>
+              </div>
+              <div className="system-setting-row">
+                <div>
+                  <div className="system-setting-title">卡片宽度</div>
+                  <div className="muted">拖动调整瀑布流卡片列宽（{CARD_WIDTH_MIN}–{CARD_WIDTH_MAX}px）</div>
+                </div>
+                <input
+                  className="card-width-slider"
+                  type="range"
+                  min={CARD_WIDTH_MIN}
+                  max={CARD_WIDTH_MAX}
+                  step={CARD_WIDTH_STEP}
+                  value={cardWidth}
+                  onChange={e => onCardWidthChange(Number(e.target.value))}
+                  // 拖动/键盘结束时才持久化，避免拖动过程高频写 localStorage
+                  onPointerUp={e => onCardWidthSave(Number((e.target as HTMLInputElement).value))}
+                  onTouchEnd={e => onCardWidthSave(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={e => onCardWidthSave(Number((e.target as HTMLInputElement).value))}
+                />
+                <span className="card-width-value">{cardWidth}px</span>
               </div>
               <div className="system-setting-actions">
                 <button className="tool-btn" disabled={settingsBusy} onClick={onClearTrueRandomCache}>清理全部缓存</button>

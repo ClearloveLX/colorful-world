@@ -63,7 +63,9 @@ This is a **local media gallery** for browsing, filtering, and managing images/v
 
 **Why two separate HTTP servers?** `open_helper.py` is launched in the user's desktop session (via `run_open_helper.ps1`) because `ShellExecuteW`/`os.startfile` requires running in the user's session. The FastAPI server may run in a different context (e.g. Windows service) and cannot directly launch GUI apps.
 
-`simple_server.py` is a minimal read-only alternative — no password, no presets, no true-random cache, no write operations, loads entire dataset into memory.
+**open_helper origin rule (don't regress):** `_is_local_origin()` rejects requests with NO Origin/Referer header (missing → rejected, not allowed); `server.py`'s internal call (`/api/open` fallback) explicitly sends `Origin: http://127.0.0.1:8001` to satisfy it. Any new internal caller must do the same.
+
+`simple_server.py` is a minimal read-only alternative — no password, no presets, no true-random cache, no write operations, loads entire dataset into memory. Security constraints (don't regress): binds `127.0.0.1` only (it has no auth), refuses `.db`/`.sqlite`/`.bak` files via `_is_blacklisted()`, and `db` is lazily initialized via `_db()` so importing the module has no DB side effects. Import uses a try/except dual path (`data.database` vs `backend.data.database`).
 
 ### 1. Web App (primary)
 - **Backend**: FastAPI (`backend/server.py`) on port 8000. Serves REST API + built frontend static files from `frontend/dist/`. A single process handles both.
@@ -78,6 +80,8 @@ This is a **local media gallery** for browsing, filtering, and managing images/v
 - Tkinter-based image classifier (`ImageClassifierApp`). Used for initial ingestion and tagging workflow. Shares the same `Database` and `FileManager` classes.
 - `run.bat` auto-creates venv, installs `requirements.txt`, sets `CW_DATA_ROOT` (preferring `L:\data` if it exists), then launches `main.py`.
 - The GUI has three main panels: **source folder browser** (scan directories for media), **classification workspace** (view one image at a time, assign models/tags, rate heat, copy/move to output or good folders), and **database browser** (query and edit existing records). Keyboard shortcuts drive the classification workflow for speed.
+- **External file opening** (`open_file_externally`, module-level): fallback chain `ShellExecuteW` → `os.startfile` → `rundll32 url.dll,FileProtocolHandler` → `explorer`; always uses `subprocess.Popen` with argument lists (never `cmd /c start`) to avoid command injection. Used by the video preview panel's "系统播放器打开" button.
+- Video preview panel: Ctrl+S saves the selected video (ignores repeats while a save is running); closing the panel (`on_close2`) must set `gen_state["cancel"]=True` and cancel the `after_id` to stop the thumbnail worker thread. Auto-save: enabling it asks for confirmation (`askyesno`), `save_image()` has a `_saving` re-entry guard, and the loop auto-disables itself when the list is empty.
 - **`FileManager`** (`backend/services/file_manager.py`) handles image/video file operations: scanning source directories for media files (by extension, including audio: `.mp3`, `.m4a`), copying files to output/good/recycle_bin folders, computing MD5 hashes, and generating thumbnails.
 
 ### Database (SQLite — `data/image_classifier.db`)
@@ -93,13 +97,19 @@ Single `Database` class in `backend/data/database.py` (~2400 lines). Core tables
 
 IDs are UUIDs (hex, no dashes). The database auto-migrates on every startup (`init_database()` called in `__init__`): checks for INTEGER→UUID migration, runs column-level `ALTER TABLE` additions, and historical table rebuilds (removing retired `image_data`, `recommend_value` columns).
 
+- Runs in **WAL mode** (set once in `_init_schema`; journal_mode is persisted on the file). `init_database()` delegates to `_init_schema(conn)` / `_init_access_password(conn)`, both try/finally-closed.
+- Module-level `compute_md5()` (chunked 4096B, no try/except — caller decides). `add_file()` / `save_image_data()` accept an optional `md5_value` to skip re-reading large files; `main.py` computes it once on first save and passes it to both.
+
 ### Tests
 - `tests/test_presets.py` — CRUD + sort_order + soft-delete tests for presets (unittest, isolated temp DB)
+- `tests/test_security.py` — /api/static whitelist, auth, Range streaming, password endpoints, open_helper origin checks
 - `tests/test_true_random_cache.py` — cache blacklisting behavior via FastAPI `TestClient` with temp DB injection (`server.db = self.db`)
+- `tests/test_tag_file_counts.py` — incremental tag/model file-count maintenance + recalc semantics
+- `tests/test_md5_reuse.py` — `compute_md5()` chunked hashing + precomputed-MD5 fast paths in `add_file`/`save_image_data`
+- `tests/test_open_video_external.py` — `open_file_externally()` fallback chain (ShellExecuteW → startfile → rundll32 → explorer)
 - `tests/test_video_preview_helpers.py` — Tkinter GUI video preview helpers (LRU cache, image resize)
 - `tests/test_video_toolbar_layout.py` — Tkinter toolbar row placement
-- `frontend/src/utils/toggleGroupOpen.test.ts` — vitest unit tests
-- `frontend/src/utils/scrollToTop.test.ts` — vitest unit tests
+- `frontend/src/utils/*.test.ts` — vitest unit tests (cardWidth, toggleGroupOpen, scrollToTop)
 - No `conftest.py` or pytest fixtures exist
 
 ### Frontend State Management
@@ -107,6 +117,8 @@ IDs are UUIDs (hex, no dashes). The database auto-migrates on every startup (`in
 - "Routing" is done via a single `?mode=edit` URL search parameter + `popstate` events.
 - `Filters` and `MediaGrid` receive filter state + callbacks as props; `MediaGrid` passes down to `MediaCard`, `Lightbox`, `BulkBar`, `TagPicker`.
 - Key refs: `idleTimerRef`, `abortControllerRef`, `IntersectionObserver`, `ResizeObserver`, `filterKeyRef` (to discard stale responses).
+- **Card width slider**: `frontend/src/utils/cardWidth.ts` persists a sanitized 180–360px width to `localStorage` (`cw_card_width`); the slider saves only on pointerup/keyup (not on every change event).
+- **Edit-mode exit sync**: MediaGrid's "exit select mode" deletes the `?mode=edit` URL param via `history.replaceState` AND manually dispatches a `PopStateEvent` — `replaceState` alone doesn't fire `popstate`, which would leave `App.tsx`'s `editMode` stale (settings panel + 15s polling keep running).
 
 ### CSS Architecture
 - Single file: `frontend/src/styles.css` (~2000 lines). No CSS modules, no Tailwind, no CSS-in-JS.
@@ -151,11 +163,11 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 
 ### Authentication Flow (Frontend)
 1. On first load, `locked = true` → lock screen shown
-2. Password form submits → `GET /api/password/validate?code=...`
-3. On success, `locked = false` → main app renders
-4. Password pre-fetched from `/api/password/current`, stored in `localStorage.cw_access_code`
-5. **10-minute idle lockout**: listens to mouse/keyboard/scroll/touch events; after 600s of inactivity → re-locks
-6. No JWT, no cookies, no token management on the frontend
+2. Password form submits → `GET /api/password/validate?code=...` → on success the server sets an httpOnly cookie `cw_access_code` (24h) and `locked = false`
+3. Lock screen pre-fetches the current code from `/api/password/current` into `localStorage.cw_access_code` for the user to consult, then types it **manually — the input is never auto-filled**. This localStorage write is a **user-mandated feature — do not remove** (it was once deleted as a security issue and the user required it back); `/api/password/current` must therefore stay exempt in `_AUTH_EXEMPT_PATHS`
+4. **Password rotation happens only on `GET /` page load** (`serve_root`, disable with `CW_PASSWORD_ROTATE=0`). Idle lockout is an SPA-internal `setLocked(true)` and does NOT rotate the password — a locked screen keeps the same valid code
+5. **10-minute idle lockout**: listens to mouse/keyboard/scroll/touch events; after 600s of inactivity → re-locks (input cleared, password unchanged)
+6. No JWT, no token management on the frontend — the httpOnly cookie is the session
 
 ### Face Clustering & Image Similarity
 - **`backend/services/face_cluster.py`**: Uses `insightface` (`buffalo_l` model, CPU only). Lazy init — sentinel `_face_model = False` prevents retrying failed loads. `detect_faces()` returns `[{bbox, embedding}]`, `cluster_faces()` uses Union-Find with O(n^2) pairwise cosine similarity (threshold 0.45).

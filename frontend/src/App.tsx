@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { validatePassword, fetchCurrentPassword, fetchTrueRandomCacheSettings, updateTrueRandomCacheSettings, clearTrueRandomCache } from './api'
 import Filters from './components/Filters'
 import MediaGrid from './components/MediaGrid'
+import { loadCardWidth, saveCardWidth } from './utils/cardWidth'
 
 export default function App() {
   const [modelIds, setModelIds] = useState<string[]>([])
@@ -21,6 +22,7 @@ export default function App() {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [settingsHint, setSettingsHint] = useState('')
   const [editMode, setEditMode] = useState(false)
+  const [cardWidth, setCardWidth] = useState<number>(() => loadCardWidth(window.localStorage))
   const [locateRequest, setLocateRequest] = useState<{ fileId: string } | null>(null)
   const [seed, setSeed] = useState<number>(() => {
     const d = new Date()
@@ -39,6 +41,12 @@ export default function App() {
       setTrueRandomCacheEnabled(r.enabled)
       setTrueRandomCacheCount(r.cached_count)
     } catch {}
+  }
+  const handleCardWidthChange = (w: number) => {
+    setCardWidth(w)
+  }
+  const handleCardWidthSave = (w: number) => {
+    saveCardWidth(w, window.localStorage)
   }
   const flashSettingsHint = (text: string) => {
     setSettingsHint(text)
@@ -162,6 +170,7 @@ export default function App() {
   }
   useEffect(() => {
     if (!locked) return
+    // 预取访问码写入 localStorage，锁屏时自动填入（必需功能，用户指定不可移除）
     ;(async () => {
       try {
         const r = await fetchCurrentPassword()
@@ -241,6 +250,9 @@ export default function App() {
               settingsHint={settingsHint}
               onToggleTrueRandomCache={onToggleTrueRandomCache}
               onClearTrueRandomCache={onClearTrueRandomCache}
+              cardWidth={cardWidth}
+              onCardWidthChange={handleCardWidthChange}
+              onCardWidthSave={handleCardWidthSave}
             />
           </aside>
           <main className="app-main-shell">
@@ -256,6 +268,7 @@ export default function App() {
               trueRandomCacheEnabled={trueRandomCacheEnabled}
               nameSearch={nameSearch}
               seed={seed}
+              cardWidthTarget={cardWidth}
               locateRequest={locateRequest}
               onLocateRequest={(fileId) => handleLocateRequest(fileId)}
               onLocateRequestClear={handleLocateRequestClear}

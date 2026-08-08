@@ -4,12 +4,27 @@ import sys
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# 允许作为脚本运行时找到 data.database
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from data.database import Database
+# 作为 backend/ 下脚本直接运行时用 data.database；作为包被导入时（测试等）用 backend.data.database
+try:
+    from data.database import Database  # type: ignore
+except ModuleNotFoundError:
+    from backend.data.database import Database
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-db = Database()
+_db_instance = None
+
+def _db():
+    """延迟初始化：import 模块不应产生数据库副作用（测试导入即触发建库）"""
+    global _db_instance
+    if _db_instance is None:
+        _db_instance = Database()
+    return _db_instance
+
+# 数据库/备份文件（含明文访问码与全部元数据）一律拒绝下发
+_BLACKLISTED_SUFFIXES = ('.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm', '.bak')
+
+def _is_blacklisted(path: str) -> bool:
+    return path.lower().endswith(_BLACKLISTED_SUFFIXES)
 
 def to_url(p: str) -> str:
     p = p.replace('\\', '/') 
@@ -42,11 +57,11 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
         try:
             if path == '/api/models':
-                models = db.get_active_models()
+                models = _db().get_active_models()
                 res = [{"id": m["id"], "name": m["name"], "preview_image_path": m.get("preview_image_path") or None} for m in models]
                 return self._send_json(res)
             if path == '/api/tags':
-                tags = db.get_tags_with_category_name(only_active=True)
+                tags = _db().get_tags_with_category_name(only_active=True)
                 res = [{"id": t["id"], "name": t["name"], "category_name": t.get("category_name") or None} for t in tags]
                 return self._send_json(res)
             if path == '/api/media':
@@ -59,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
                 max_heat_str = qs.get('max_heat', [''])[0]
                 min_heat = int(min_heat_str) if min_heat_str else None
                 max_heat = int(max_heat_str) if max_heat_str else None
-                all_items = db.get_all_files_with_relations()
+                all_items = _db().get_all_files_with_relations()
                 filtered = []
                 for info in all_items:
                     models = info.get('models', [])
@@ -117,6 +132,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not os.path.exists(fs_path) or not os.path.isfile(fs_path):
                     self.send_error(404)
                     return
+                # 黑名单：数据库/备份文件（含明文访问码与全部元数据）一律拒绝下发
+                if _is_blacklisted(fs_path):
+                    self.send_error(403)
+                    return
                 # 简单文件传输
                 ctype = 'application/octet-stream'
                 if fs_path.lower().endswith(('.jpg','.jpeg')):
@@ -142,8 +161,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = 3000
-    server = HTTPServer(('0.0.0.0', port), Handler)
-    print(f"Simple API server listening on http://localhost:{port}")
+    # 仅绑定本机回环：该服务器无鉴权（无访问码），绑定 0.0.0.0 会暴露给局域网
+    server = HTTPServer(('127.0.0.1', port), Handler)
+    print(f"Simple API server listening on http://127.0.0.1:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -192,11 +192,15 @@ export async function bulkUpdateHeat(fileIds: string[], delta: number): Promise<
   return r.json()
 }
 
+// open_helper 固定监听本机 8001（由 run_open_helper.ps1 启动）
+const OPEN_HELPER_URL = 'http://127.0.0.1:8001'
+
 export async function openInSystem(filePath: string): Promise<boolean> {
   if (!filePath) return false
   try {
     const u = new URL(filePath, window.location.origin)
-    if (!u.pathname.startsWith('/api/file')) return false
+    // 精确匹配 /api/file 端点（前缀校验过宽会放过 /api/file_evil 等伪造路径）
+    if (u.pathname !== '/api/file') return false
     const b64 = u.searchParams.get('path')
     if (!b64) return false
     const tryPost = async (endpoint: string): Promise<boolean> => {
@@ -212,7 +216,7 @@ export async function openInSystem(filePath: string): Promise<boolean> {
       }
     }
     // 优先走 open_helper（用户桌面会话），失败回退到 FastAPI 自身的 /api/open
-    if (await tryPost(`http://127.0.0.1:8001/open?path=${encodeURIComponent(b64)}`)) return true
+    if (await tryPost(`${OPEN_HELPER_URL}/open?path=${encodeURIComponent(b64)}`)) return true
     return await tryPost(`/api/open?path=${encodeURIComponent(b64)}`)
   } catch {
     return false

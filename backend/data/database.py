@@ -10,6 +10,20 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
+
+
+def compute_md5(file_path):
+    """分块计算文件 MD5(4096 字节),返回 hexdigest。
+
+    不做 try/except 兜底,由调用方决定异常策略(与两处原调用点行为一致)。
+    """
+    md5_hash = hashlib.md5()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            md5_hash.update(chunk)
+    return md5_hash.hexdigest()
+
+
 try:
     import cv2  # 可选：仅用于视频元数据提取
 except Exception:
@@ -101,9 +115,23 @@ class Database:
         return uuid.uuid4().hex
     
     def init_database(self):
-        """初始化数据库表结构"""
+        """初始化数据库表结构（两段连接均 try/finally 保证异常时关闭）"""
         conn = self.get_connection()
+        try:
+            self._init_schema(conn)
+        finally:
+            conn.close()
+        conn = self.get_connection()
+        try:
+            self._init_access_password(conn)
+        finally:
+            conn.close()
+
+    def _init_schema(self, conn):
+        """建表 + 迁移（连接由调用方关闭）"""
         cursor = conn.cursor()
+        # WAL 模式：读写不互锁，避免多连接写锁竞争（设置持久化到数据库文件，后续连接自动生效）
+        cursor.execute('PRAGMA journal_mode = WAL')
         
         # 检查是否需要迁移数据库
         self._migrate_database_if_needed(cursor)
@@ -395,9 +423,9 @@ class Database:
         self._ensure_app_settings_table(cursor)
         
         conn.commit()
-        conn.close()
-        
-        conn = self.get_connection()
+
+    def _init_access_password(self, conn):
+        """访问密码表 + 静态密码覆盖（连接由调用方关闭）"""
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS access_password (
@@ -421,8 +449,7 @@ class Database:
         except Exception:
             pass
         conn.commit()
-        conn.close()
-    
+
     def _migrate_database_if_needed(self, cursor):
         """迁移数据库：将INTEGER ID转换为GUID"""
         # 检查是否已经迁移过（通过检查models表的id字段类型）
@@ -1565,23 +1592,21 @@ class Database:
     
     # ========== 文件相关操作 ==========
     
-    def add_file(self, file_path, file_name=None, file_size=None):
-        """添加文件记录，自动计算MD5值"""
+    def add_file(self, file_path, file_name=None, file_size=None, md5_value=None):
+        """添加文件记录，自动计算MD5值
+
+        md5_value: 外部已算好的 MD5 时传入,跳过文件读取(避免大文件重复计算)。
+        """
         if file_name is None:
             file_name = os.path.basename(file_path)
         if file_size is None and os.path.exists(file_path):
             file_size = os.path.getsize(file_path)
         now = datetime.now().isoformat()
 
-        # 计算MD5值
-        md5_value = None
-        if os.path.exists(file_path):
+        # 计算MD5值(未传入时兜底计算)
+        if md5_value is None and os.path.exists(file_path):
             try:
-                md5_hash = hashlib.md5()
-                with open(file_path, 'rb') as f:
-                    for chunk in iter(lambda: f.read(4096), b''):
-                        md5_hash.update(chunk)
-                md5_value = md5_hash.hexdigest()
+                md5_value = compute_md5(file_path)
             except Exception:
                 pass
 
@@ -1694,20 +1719,19 @@ class Database:
             self._adjust_tag_counts(cursor, direct, set(), inherited, set())
             return True
     
-    def save_image_data(self, file_id, image_path):
-        """计算并保存图片的MD5值与尺寸到数据库"""
+    def save_image_data(self, file_id, image_path, md5_value=None):
+        """计算并保存图片的MD5值与尺寸到数据库
+
+        md5_value: 外部已算好的 MD5 时传入,跳过文件读取(避免大文件重复计算)。
+        """
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().isoformat()
-        
+
         try:
-            # 计算图片文件的MD5值
-            md5_hash = hashlib.md5()
-            with open(image_path, 'rb') as f:
-                # 分块读取，避免大文件占用过多内存
-                for chunk in iter(lambda: f.read(4096), b''):
-                    md5_hash.update(chunk)
-            md5_value = md5_hash.hexdigest()
+            # 计算图片文件的MD5值(未传入时兜底计算)
+            if md5_value is None:
+                md5_value = compute_md5(image_path)
             # 读取图片尺寸
             width = None
             height = None
