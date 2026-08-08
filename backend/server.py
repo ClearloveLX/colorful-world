@@ -576,13 +576,15 @@ def _bulk_blacklist(file_ids: List[str]):
                 continue
             if os.path.isfile(ap):
                 bad_folder = os.path.join(root, "bad")
-                os.makedirs(bad_folder, exist_ok=True)
-                target = os.path.join(bad_folder, os.path.basename(ap))
-                if os.path.exists(target):
-                    name, ext = os.path.splitext(os.path.basename(ap))
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    target = os.path.join(bad_folder, f"{name}_{timestamp}{ext}")
-                shutil.move(ap, target)
+                # 已在黑名单文件夹时跳过移动（与客户端 add_to_blacklist 一致）
+                if os.path.dirname(ap) != bad_folder:
+                    os.makedirs(bad_folder, exist_ok=True)
+                    target = os.path.join(bad_folder, os.path.basename(ap))
+                    if os.path.exists(target):
+                        name, ext = os.path.splitext(os.path.basename(ap))
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        target = os.path.join(bad_folder, f"{name}_{timestamp}{ext}")
+                    shutil.move(ap, target)
             db.delete_file(fid)
             updated += 1
         except Exception:

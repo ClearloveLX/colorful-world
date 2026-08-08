@@ -1308,12 +1308,12 @@ div:first-child > .group-header { margin-top: 2px; }
 }
 
 .bulk-blacklist-btn {
-  border-color: rgba(220, 80, 80, 0.4) !important;
-  color: #e8a0a0 !important;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 .bulk-blacklist-btn:hover:not(:disabled) {
-  background: rgba(220, 80, 80, 0.15) !important;
-  border-color: rgba(220, 80, 80, 0.7) !important;
+  background: var(--danger-bg);
+  border-color: var(--danger);
 }
 
 /* ── Heat Group ───────────────────────────────── */
