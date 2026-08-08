@@ -86,6 +86,7 @@ class StaticWhitelistTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
 
     def test_password_endpoints_exempt(self):
+        # 锁屏页需预取访问码写入 localStorage 自动填入，两个密码端点均豁免鉴权
         client = TestClient(server.app)  # 无 cookie
         resp = client.get("/api/password/current")
         self.assertEqual(resp.status_code, 200)
@@ -146,10 +147,11 @@ class OpenHelperValidationTestCase(unittest.TestCase):
         headers["Referer"] = "http://192.168.1.99/"
         self.assertFalse(_is_local_origin(headers))
 
-    def test_missing_origin_allowed(self):
+    def test_missing_origin_rejected(self):
         import email.message
         headers = email.message.Message()
-        self.assertTrue(_is_local_origin(headers))  # server.py 内部调用不带 Origin
+        # 缺失 Origin/Referer 一律拒绝：浏览器跨站请求必然携带，缺失说明非浏览器来源
+        self.assertFalse(_is_local_origin(headers))
 
     def test_data_root_resolution(self):
         root = _get_data_root()

@@ -76,9 +76,7 @@ body {
   font-weight: 400;
   letter-spacing: -0.022em;
   color: var(--text);
-  background:
-    radial-gradient(circle at top, rgba(184,154,103,0.1), transparent 28%),
-    linear-gradient(180deg, #181b20 0%, #111316 48%, #0d0f12 100%);
+  background: var(--bg-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -88,7 +86,6 @@ body {
   display: grid;
   grid-template-columns: 300px 1fr;
   min-height: 100vh;
-  background: radial-gradient(circle at 0% 0%, rgba(184,154,103,0.06), transparent 30%);
 }
 
 /* ── Sidebar Shell ───────────────────────────── */
@@ -340,6 +337,8 @@ body {
   padding: 0;
   transition: transform 0.18s var(--ease-spring), opacity 0.15s var(--ease), background 0.15s var(--ease), border-color 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease);
   z-index: 1;
+  /* 透明时不可点击，避免误触标签文字边缘 */
+  pointer-events: none;
 }
 .tag-action-btn.include-btn { left: 3px; }
 .tag-action-btn.exclude-btn { right: 3px; }
@@ -348,11 +347,12 @@ body {
 .tag-chip:hover .tag-action-btn,
 .tag-chip:focus-within .tag-action-btn {
   opacity: 1;
+  pointer-events: auto;
   animation: tagBtnPop 0.32s var(--ease-spring) both;
 }
 .tag-chip:hover .tag-action-btn.exclude-btn,
 .tag-chip:focus-within .tag-action-btn.exclude-btn { animation-delay: 0.06s; }
-.tag-action-btn.active { opacity: 1; }
+.tag-action-btn.active { opacity: 1; pointer-events: auto; }
 
 @keyframes tagBtnPop {
   0%   { transform: translateY(-50%) scale(0.2) rotate(-100deg); opacity: 0; }
@@ -743,6 +743,13 @@ div:first-child > .group-header { margin-top: 2px; }
   background: rgba(18,20,25,0.92);
 }
 
+/* 触屏设备无 hover：标签包含/排除按钮与卡片定位按钮常显 */
+@media (hover: none) {
+  .tag-chip { padding-left: 26px; padding-right: 26px; }
+  .tag-action-btn { opacity: 1; pointer-events: auto; }
+  .card-locate-btn { opacity: 1; }
+}
+
 .card-select-toggle {
   position: absolute;
   top: 8px;
@@ -1123,6 +1130,16 @@ div:first-child > .group-header { margin-top: 2px; }
   display: grid;
   place-items: center;
   flex: 1;
+  min-width: 0;
+}
+/* 媒体尺寸：桌面横向布局下为两个 meta 面板(220px+320px+gap)之外的可视宽度 */
+.lightbox-media img,
+.lightbox-media .video-player-wrap {
+  max-width: calc(90vw - 580px);
+  max-height: 90vh;
+}
+.lightbox-media img {
+  object-fit: contain;
 }
 
 .lightbox-meta {
@@ -1399,6 +1416,14 @@ div:first-child > .group-header { margin-top: 2px; }
 }
 .system-setting-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .system-setting-hint { font-size: 12px; color: var(--text); font-weight: 500; }
+.card-width-slider { flex: 1; min-width: 100px; accent-color: var(--accent); }
+.card-width-value {
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
 
 /* Switch */
 .switch { display: inline-flex; align-items: center; cursor: pointer; }
@@ -1701,6 +1726,18 @@ div:first-child > .group-header { margin-top: 2px; }
   align-items: center;
   gap: 10px;
   margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.video-play-failed {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: var(--r-md);
+  background: rgba(220, 80, 80, 0.12);
+  border: 1px solid rgba(220, 80, 80, 0.35);
+  color: #e8a0a0;
+  font-size: 12px;
+  text-align: center;
 }
 
 .video-btn {
@@ -1757,9 +1794,7 @@ div:first-child > .group-header { margin-top: 2px; }
   inset: 0;
   display: grid;
   place-items: center;
-  background:
-    radial-gradient(circle at top, rgba(184,154,103,0.12), transparent 30%),
-    linear-gradient(180deg, #181b20 0%, #111316 50%, #0d0f12 100%);
+  background: var(--bg-primary);
   z-index: 200;
 }
 
@@ -1975,7 +2010,20 @@ select:focus-visible {
 
   .lightbox-body { flex-direction: column; }
   .lightbox-meta.lightbox-right,
-  .lightbox-meta.lightbox-left { width: 100%; max-width: 90vw; }
+  .lightbox-meta.lightbox-left {
+    width: 100%;
+    max-width: 90vw;
+    flex-shrink: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  /* 纵向布局下媒体占满容器宽度，并给上下 meta 面板留出空间，避免按钮被裁切 */
+  .lightbox-media { width: 100%; }
+  .lightbox-media img,
+  .lightbox-media .video-player-wrap {
+    max-width: 100%;
+    max-height: 55vh;
+  }
 }
 
 @media (max-width: 640px) {

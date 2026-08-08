@@ -14,10 +14,11 @@ import cv2
 from pathlib import Path
 from datetime import datetime
 import ctypes
+import subprocess
 import functools
 from collections import OrderedDict
 
-from backend.data.database import Database
+from backend.data.database import Database, compute_md5
 from backend.services.file_manager import FileManager
 
 # 数据根目录可通过环境变量 CW_DATA_ROOT 配置，默认使用项目内的 data 目录
@@ -98,6 +99,39 @@ def get_video_processor_toolbar_layout():
     )
 
 
+def open_file_externally(path):
+    """用系统默认关联程序打开文件。依次尝试 ShellExecuteW → os.startfile → rundll32 → explorer。
+    不使用 cmd /c start（文件名含 & 或 " 时存在命令注入风险，见 backend/open_helper.py）。"""
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        # 1. ShellExecuteW
+        r = ctypes.windll.shell32.ShellExecuteW(None, "open", path, None, os.path.dirname(path), 1)
+        if r > 32:
+            return True
+    except Exception:
+        pass
+    try:
+        # 2. os.startfile
+        os.startfile(path)
+        return True
+    except Exception:
+        pass
+    try:
+        # 3. rundll32 url.dll,FileProtocolHandler
+        subprocess.Popen(["rundll32.exe", "url.dll,FileProtocolHandler", path])
+        return True
+    except Exception:
+        pass
+    try:
+        # 4. explorer
+        subprocess.Popen(["explorer.exe", path])
+        return True
+    except Exception:
+        pass
+    return False
+
+
 class ImageClassifierApp:
     VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.mpeg', '.mpg', '.m4v', '.ts', '.m2ts', '.wmv', '.3gp'}
     AUDIO_EXTENSIONS = {'.mp3', '.m4a'}
@@ -130,6 +164,7 @@ class ImageClassifierApp:
 
         # 自动保存开关（默认关闭）
         self.auto_save_enabled = tk.BooleanVar(value=False)
+        self._saving = False  # 保存重入保护标志（自动保存循环与双击按钮可能并发触发）
 
         # 上一次选择的分类（用于保留选择）
         self.last_selected_model_id = None  # 改为单选，存储单个ID
@@ -848,7 +883,12 @@ class ImageClassifierApp:
         
         # 如果列表为空，显示提示并清空显示
         if len(self.image_files) == 0:
-            self.status_label.config(text="待处理列表已为空")
+            # 自动保存流程处理完所有文件后,自动关闭自动保存开关
+            if self.auto_save_enabled.get():
+                self._set_auto_save_enabled(False)
+                self.status_label.config(text="待处理列表已为空,已自动关闭自动保存")
+            else:
+                self.status_label.config(text="待处理列表已为空")
             # 清空当前图片显示
             self.current_image_path = None
             self.current_file_id = None
@@ -1463,6 +1503,15 @@ class ImageClassifierApp:
         video_controls.pack(fill=tk.X, padx=5, pady=(0,5))
         video_play_btn = ttk.Button(video_controls, text="播放")
         video_play_btn.pack(side=tk.LEFT, padx=5)
+        def open_with_system_player():
+            sel = video_listbox.curselection()
+            if not sel or sel[0] >= len(displayed_videos):
+                messagebox.showwarning("警告", "请先选择一个视频")
+                return
+            path = displayed_videos[sel[0]]
+            if not open_file_externally(path):
+                messagebox.showerror("错误", "无法用系统播放器打开该视频")
+        ttk.Button(video_controls, text="系统播放器打开", command=open_with_system_player).pack(side=tk.LEFT, padx=5)
         vp_video_seek_var = tk.DoubleVar(value=0)
         video_seek = ttk.Scale(video_controls, orient="horizontal", variable=vp_video_seek_var)
         video_seek.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
@@ -2215,6 +2264,14 @@ class ImageClassifierApp:
             tag_ids = [tid for tid,var in tag_vars.items() if var.get()]
             # 主线程读取 Tk 变量（后台线程不得访问 Tk 解释器）
             preset_name = video_preset_var.get()
+            # 主线程快照缩略图引用：保存期间用户可能重新生成缩略图（thumbs_images.clear()），
+            # 后台线程再读列表会 IndexError，导致文件已移动但 DB 未更新
+            thumb_snapshot = None
+            if thumbs_images:
+                idx = selected_thumb_index['idx']
+                if idx < 0 or idx >= len(thumbs_images):
+                    idx = 0
+                thumb_snapshot = thumbs_images[idx]
             def save_worker():
                 try:
                     file_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else None
@@ -2248,14 +2305,11 @@ class ImageClassifierApp:
                     if os.path.exists(new_path):
                         os.remove(new_path)
                     shutil.move(vid_path, new_path)
-                    if thumbs_images:
-                        idx = selected_thumb_index['idx']
-                        if idx < 0 or idx >= len(thumbs_images):
-                            idx = 0
-                        full_img = thumbs_images[idx]
+                    if thumb_snapshot is not None:
+                        full_img = thumb_snapshot
                         out_img = full_img.copy() if hasattr(full_img, 'copy') else full_img
                         if out_img is None:
-                            out_img = thumbs_images[0]
+                            out_img = thumb_snapshot
                         if out_img.mode not in ("RGB", "RGBA"):
                             out_img = out_img.convert("RGB")
                         max_w = 1280
@@ -2314,6 +2368,13 @@ class ImageClassifierApp:
         video_listbox.bind('<<ListboxSelect>>', on_select_video)
         search_entry.bind('<KeyRelease>', lambda e: refresh_video_list())
         save_btn.config(command=do_save)
+        # Ctrl+S 快捷键保存（与按钮行为一致：保存进行中忽略重复触发）
+        def on_save_shortcut(e):
+            if str(save_btn['state']) == 'disabled':
+                return 'break'
+            do_save()
+            return 'break'
+        vp.bind('<Control-s>', on_save_shortcut)
         # 高亮选中样式
         style = ttk.Style(vp)
         style.configure('Selected.TFrame', bordercolor='blue')
@@ -2324,6 +2385,16 @@ class ImageClassifierApp:
             folder_label.config(text=f"源文件夹: {os.path.basename(self.file_manager.source_folder)}")
         refresh_video_list()
         def on_close2():
+            # 先停止后台缩略图生成：取消 consume 循环并通知 worker 线程退出，
+            # 否则 worker 继续解码且 consume 在已销毁的 Toplevel 上 after() 会抛 TclError
+            try:
+                if gen_state.get("after_id"):
+                    vp.after_cancel(gen_state["after_id"])
+                    gen_state["after_id"] = None
+                gen_state["cancel"] = True
+                gen_state["busy"] = False
+            except Exception:
+                pass
             try:
                 vp_destroy_video()
             except Exception:
@@ -2538,6 +2609,11 @@ class ImageClassifierApp:
     
     def save_image(self, silent=False):
         """保存当前图片到数据库"""
+        if self._saving:
+            # 重入保护：自动保存的 after 回调与用户双击保存按钮可能并发触发
+            if not silent:
+                messagebox.showinfo("提示", "正在保存中，请稍候")
+            return
         if not self.current_image_path:
             if not silent:
                 messagebox.showwarning("警告", "请先选择一张图片")
@@ -2565,10 +2641,13 @@ class ImageClassifierApp:
         # 获取选中的标签（可选）
         selected_tag_ids = [tag_id for tag_id, var in self.tag_vars.items() if var.get()]
 
+        self._saving = True
         try:
-            # 如果文件记录不存在，先创建文件记录获取ID
+            # 首次保存时计算一次MD5,同时传给 add_file 与 save_image_data,避免重复读取大文件
+            md5_value = None
             if not self.current_file_id:
-                self.current_file_id = self.db.add_file(self.current_image_path)
+                md5_value = compute_md5(self.current_image_path)
+                self.current_file_id = self.db.add_file(self.current_image_path, md5_value=md5_value)
             
             # 获取第一个选中的模特ID（用于创建文件夹）
             model_id = selected_model_ids[0]
@@ -2629,16 +2708,21 @@ class ImageClassifierApp:
                 # 文件已经在目标位置，确保数据库中的文件名正确
                 self.db.update_file(self.current_file_id, file_name=new_filename)
             
-            # 计算并保存图片的MD5值到数据库
-            self.db.save_image_data(self.current_file_id, new_file_path)
+            # 计算并保存图片的MD5值到数据库（首次保存复用前面算好的MD5）
+            self.db.save_image_data(self.current_file_id, new_file_path, md5_value=md5_value)
             
             # 保存关联关系（使用 set 方法避免重复）
             self.db.set_file_models(self.current_file_id, selected_model_ids)
             self.db.set_file_tags(self.current_file_id, selected_tag_ids)
             
-            # 保存后优先恢复当前预制的标签选择，以便下一张继续沿用该预制
+            # 保存后优先恢复当前预制的标签选择，以便下一张继续沿用该预制。
+            # 预制恢复失败（如含已失效标签）不影响保存结果，单独兜底
             self.last_selected_model_id = selected_model_id
-            if not self._restore_current_preset_tags('image', preset_name=self.image_preset_var.get()):
+            try:
+                restored = self._restore_current_preset_tags('image', preset_name=self.image_preset_var.get())
+            except Exception:
+                restored = False
+            if not restored:
                 self.last_selected_tag_ids = selected_tag_ids
             
             # 在状态栏显示保存成功信息
@@ -2652,13 +2736,23 @@ class ImageClassifierApp:
             if not silent:
                 messagebox.showerror("错误", f"保存图片失败:\n{str(e)}")
             self.status_label.config(text="保存图片失败")
+        finally:
+            self._saving = False
+
+    def _set_auto_save_enabled(self, enabled):
+        """设置自动保存开关状态并持久化"""
+        self.auto_save_enabled.set(enabled)
+        self._update_auto_save_btn()
+        self.db.set_auto_save_enabled(enabled)
 
     def _on_auto_save_btn_click(self):
         """自动保存按钮点击时切换状态并持久化"""
         enabled = not self.auto_save_enabled.get()
-        self.auto_save_enabled.set(enabled)
-        self._update_auto_save_btn()
-        self.db.set_auto_save_enabled(enabled)
+        if enabled:
+            # 确认：开启后浏览到带标签+模特的文件会自动保存并移动，可能批量归档整个目录
+            if not messagebox.askyesno("确认开启自动保存", "开启后，浏览到已选择模特和标签的文件时将自动保存并移动文件。\n确认开启吗？"):
+                return
+        self._set_auto_save_enabled(enabled)
         if enabled:
             self.status_label.config(text="自动保存已开启")
         else:

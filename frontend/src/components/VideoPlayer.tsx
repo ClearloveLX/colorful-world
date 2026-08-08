@@ -28,6 +28,9 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
   const [fs, setFs] = useState<boolean>(false)
   const [srcToken, setSrcToken] = useState<number>(0)
   const retryLockRef = useRef<number>(0)
+  const retryCountRef = useRef<number>(0)
+  const [playFailed, setPlayFailed] = useState(false)
+  const MAX_RETRIES = 3
 
   useEffect(() => {
     const el = ref.current
@@ -141,6 +144,12 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
     const now = Date.now()
     if (now - (retryLockRef.current || 0) < 5000) return
     retryLockRef.current = now
+    // 上限保护：损坏/无法解码的视频不再无限强制重载（每次重载都会重新拉取网络资源）
+    if (retryCountRef.current >= MAX_RETRIES) {
+      setPlayFailed(true)
+      return
+    }
+    retryCountRef.current += 1
     const el = ref.current
     if (!el) return
     const prevTime = el.currentTime || 0
@@ -162,6 +171,9 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
     }, 20)
   }
   useEffect(() => {
+    // 切换视频源时重置重试计数与失败状态
+    retryCountRef.current = 0
+    setPlayFailed(false)
     const id = window.setInterval(() => {
       const el = ref.current
       if (!el) return
@@ -244,6 +256,7 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
         preload="metadata"
         loop
       />
+      {playFailed && <div className="video-play-failed">视频加载失败，请尝试用系统播放器打开</div>}
       <div className="video-controls-row">
         <button className="video-btn" onClick={togglePlay}>{playing ? '暂停' : '播放'}</button>
         <button className="video-btn" onClick={toggleFs}>{fs ? '退出全屏' : '全屏'}</button>

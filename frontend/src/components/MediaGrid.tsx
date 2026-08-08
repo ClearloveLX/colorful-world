@@ -20,6 +20,7 @@ type Props = {
   trueRandomCacheEnabled: boolean
   seed: number
   nameSearch?: string
+  cardWidthTarget?: number
   locateRequest?: { fileId: string } | null
   onLocateRequest?: (fileId: string) => void
   onLocateRequestClear?: () => void
@@ -27,7 +28,7 @@ type Props = {
   onModelClick?: (id: string) => void
 }
 
-export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', locateRequest, onLocateRequest, onLocateRequestClear, onTagClick, onModelClick }: Props) {
+export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', cardWidthTarget = 300, locateRequest, onLocateRequest, onLocateRequestClear, onTagClick, onModelClick }: Props) {
   const PAGE_SIZE = 60
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
@@ -46,7 +47,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const [colCount, setColCount] = useState<number>(4)
-  const [colWidth, setColWidth] = useState<number>(300)
+  const [colWidth, setColWidth] = useState<number>(cardWidthTarget)
   const filterKeyRef = useRef<string>('')
   const prefetchedRef = useRef<Set<string>>(new Set())
   const [selectMode, setSelectMode] = useState<boolean>(false)
@@ -205,6 +206,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     if (!selectMode) return
     resetToFirstPage()
   }, [selectMode])
+  // 筛选条件或排序方式变化时，清空编辑模式下已选中的卡片
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch])
   useEffect(() => {
     if (!selectMode) return
     const onKey = (e: KeyboardEvent) => {
@@ -380,9 +385,9 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   useEffect(() => {
     const el = gridRef.current
     if (!el) return
-    const GAP = 16
-    const MIN_COL = 260
-    const TARGET_COL = 300
+    const GAP = 18
+    const MIN_COL = Math.min(cardWidthTarget, 260)
+    const TARGET_COL = cardWidthTarget
     const host = el.parentElement ?? el
     const ro = new ResizeObserver(([entry]) => {
       const w = Math.max(0, Math.floor(entry.contentRect.width))
@@ -396,14 +401,14 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     })
     ro.observe(host)
     return () => ro.disconnect()
-  }, [])
+  }, [cardWidthTarget])
 
   const columns = useMemo(() => {
     const cc = Math.max(1, colCount)
     const cols: Array<Array<{ item: MediaItem; idx: number }>> = Array.from({ length: cc }, () => [])
     const heights = Array.from({ length: cc }, () => 0)
     const w = colWidth || 300
-    const gap = 16
+    const gap = 18
     const base = 88
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
@@ -729,6 +734,8 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
               const url = new URL(window.location.href)
               url.searchParams.delete('mode')
               window.history.replaceState({}, '', url.toString())
+              // replaceState 不触发 popstate，手动派发让 App.tsx 的 editMode 同步
+              window.dispatchEvent(new PopStateEvent('popstate'))
             } catch {}
           }}
           heatBusy={heatBusy}
@@ -803,7 +810,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           const cc = Math.max(1, colCount)
           const skCols: Array<Array<{ id: string; h: number }>> = Array.from({ length: cc }, () => [])
           const skHeights = Array.from({ length: cc }, () => 0)
-          const gap = 16
+          const gap = 18
           const base = 53
           for (const sk of skeletons) {
             let minCol = 0
@@ -930,7 +937,17 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
                 <button className="pill pill-dark clickable" onClick={(e) => { e.stopPropagation(); onOpenInSystem() }}>
                   用系统工具打开
                 </button>
-                <a className="pill pill-dark clickable" style={{ marginLeft: 8 }} href={it.file_path} target="_blank" rel="noreferrer">
+                <a
+                  className="pill pill-dark clickable"
+                  style={{ marginLeft: 8 }}
+                  href={it.file_path}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => {
+                    // 仅放行 http(s) 与同源相对路径，拦截 javascript: 等协议注入
+                    if (!/^(https?:\/\/|\/)/.test(it.file_path || '')) e.preventDefault()
+                  }}
+                >
                   在浏览器打开原文件
                 </a>
               </div>
@@ -968,9 +985,9 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
               if ((w > 0 && h > 0) || (d && d > 0)) setVMeta({ w, h, d })
             }
             return isVideo ? (
-              <VideoPlayer src={src} onLoadedMetadata={onMeta} autoplay initialVolume={0.08} style={{ maxWidth:'calc(90vw - 580px)', maxHeight:'90vh' }} />
+              <VideoPlayer src={src} onLoadedMetadata={onMeta} autoplay initialVolume={0.08} />
             ) : (
-              <img src={it.file_path} style={{ maxWidth:'calc(90vw - 580px)', maxHeight:'90vh', objectFit:'contain' }} />
+              <img src={it.file_path} className="lightbox-img" />
             )
           })()
         )}

@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import sys
 import subprocess
@@ -19,7 +20,12 @@ def _get_data_root():
 
 
 def _is_local_origin(headers):
-    """校验 Origin/Referer 必须来自本机页面；缺失时放行（server.py 内部调用不带 Origin）。"""
+    """校验 Origin/Referer 至少存在一个且来自本机页面。
+
+    全部缺失时拒绝：浏览器跨站 POST 必然携带 Origin，缺失说明请求非浏览器来源
+    （如恶意脚本），不应放行。server.py 内部调用需显式携带 Origin 头。
+    """
+    saw_local = False
     for name in ("Origin", "Referer"):
         value = headers.get(name)
         if not value:
@@ -29,14 +35,15 @@ def _is_local_origin(headers):
         except Exception:
             return False
         if host.startswith("localhost") or host.startswith("127.0.0.1"):
+            saw_local = True
             continue
         return False
-    return True
+    return saw_local
 
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200):
-        data = ('{"ok":true}' if code == 200 else '{"ok":false}').encode('utf-8')
+        data = json.dumps(obj, ensure_ascii=False).encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -56,7 +63,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/open":
-            # CSRF 防护：非本机来源的网页请求直接拒绝（server.py 内部调用无 Origin/Referer，放行）
+            # CSRF 防护：Origin/Referer 缺失或非本机来源的请求直接拒绝
+            # （server.py 内部调用已显式携带 Origin: http://127.0.0.1:8001）
             if not _is_local_origin(self.headers):
                 self._send_json({"ok": False}, code=403)
                 return

@@ -29,7 +29,8 @@ _ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
 ]
 
-# 登录流程自身所需的端点豁免鉴权；其余全部 /api/* 必须携带有效访问码
+# 登录流程自身所需的端点豁免鉴权；其余全部 /api/* 必须携带有效访问码。
+# /api/password/current 必须豁免：锁屏页需预取访问码写入 localStorage 以便自动填入。
 _AUTH_EXEMPT_PATHS = {"/api/password/validate", "/api/password/current"}
 
 def require_access(request: Request) -> None:
@@ -483,7 +484,8 @@ def _open_in_system(p: str, raw_path: str) -> bool:
             pass
         try:
             u = "http://127.0.0.1:8001/open?path=" + urllib.parse.quote(raw_path)
-            req = urllib.request.Request(u, method="POST")
+            # open_helper 要求 Origin 存在且为本机来源（缺失时拒绝），内部调用需显式携带
+            req = urllib.request.Request(u, method="POST", headers={"Origin": "http://127.0.0.1:8001"})
             urllib.request.urlopen(req, timeout=1)
             return True
         except Exception:
