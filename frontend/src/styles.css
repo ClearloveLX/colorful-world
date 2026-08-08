@@ -1307,6 +1307,15 @@ div:first-child > .group-header { margin-top: 2px; }
   box-shadow: none;
 }
 
+.bulk-blacklist-btn {
+  border-color: rgba(220, 80, 80, 0.4) !important;
+  color: #e8a0a0 !important;
+}
+.bulk-blacklist-btn:hover:not(:disabled) {
+  background: rgba(220, 80, 80, 0.15) !important;
+  border-color: rgba(220, 80, 80, 0.7) !important;
+}
+
 /* ── Heat Group ───────────────────────────────── */
 .heat-group {
   display: flex;

@@ -192,6 +192,16 @@ export async function bulkUpdateHeat(fileIds: string[], delta: number): Promise<
   return r.json()
 }
 
+export async function bulkBlacklist(fileIds: string[]): Promise<{ ok: boolean; updated: number; skipped: number; errors: number }> {
+  const r = await fetch(`${API_BASE}/files/bulk/blacklist`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ file_ids: fileIds })
+  })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
 // open_helper 固定监听本机 8001（由 run_open_helper.ps1 启动）
 const OPEN_HELPER_URL = 'http://127.0.0.1:8001'
 

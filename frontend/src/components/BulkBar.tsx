@@ -2,6 +2,7 @@ type Props = {
   selectedCount: number
   onAddTags: () => void
   onRemoveTags: () => void
+  onBlacklist: () => void
   onIncreaseHeat: () => void
   onDecreaseHeat: () => void
   onRefresh: () => void
@@ -11,7 +12,7 @@ type Props = {
   heatBusy?: boolean
 }
 
-export default function BulkBar({ selectedCount, onAddTags, onRemoveTags, onIncreaseHeat, onDecreaseHeat, onRefresh, onClear, onExit, onSelectAll, heatBusy = false }: Props) {
+export default function BulkBar({ selectedCount, onAddTags, onRemoveTags, onBlacklist, onIncreaseHeat, onDecreaseHeat, onRefresh, onClear, onExit, onSelectAll, heatBusy = false }: Props) {
   const noSelection = selectedCount <= 0
   return (
     <div className="bulk-bar" role="region" aria-label="批量操作栏">
@@ -21,6 +22,7 @@ export default function BulkBar({ selectedCount, onAddTags, onRemoveTags, onIncr
       <div className="bulk-group">
         <button className="tool-btn primary bulk-tag-btn bulk-tag-add" onClick={onAddTags} disabled={noSelection}>添加标签</button>
         <button className="tool-btn primary bulk-tag-btn bulk-tag-remove" onClick={onRemoveTags} disabled={noSelection}>移除标签</button>
+        <button className="tool-btn bulk-blacklist-btn" onClick={onBlacklist} disabled={noSelection}>加入黑名单</button>
       </div>
       <div className={`heat-group${heatBusy ? ' disabled' : ''}`} aria-label="批量好感度操作">
         <span className="heat-group-label">好感度</span>
