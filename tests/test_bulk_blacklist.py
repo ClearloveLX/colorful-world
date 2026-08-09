@@ -146,6 +146,22 @@ class BulkBlacklistTestCase(unittest.TestCase):
         finally:
             os.remove(outside)
 
+    def test_moved_file_uses_original_name(self):
+        """bad 文件夹中文件恢复原始文件名（便于辨认），而非 file_id 名"""
+        fid = self.db.add_file(self.media_a)  # 当前名 = a.jpg (basename)
+        conn = self.db.get_connection()
+        try:
+            # 模拟客户端保存流程: 原名已记录
+            conn.execute('UPDATE files SET original_file_name = ? WHERE id = ?', ('azami-fgo-original-name.jpg', fid))
+            conn.commit()
+        finally:
+            conn.close()
+        resp = self._post([fid])
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["updated"], 1)
+        bad_files = os.listdir(os.path.join(self.temp_dir.name, "bad"))
+        self.assertIn("azami-fgo-original-name.jpg", bad_files)
+
     def test_unknown_file_id_is_skipped(self):
         resp = self._post(["does-not-exist"])
         self.assertEqual(resp.status_code, 200)
