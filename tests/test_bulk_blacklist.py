@@ -104,6 +104,24 @@ class BulkBlacklistTestCase(unittest.TestCase):
         finally:
             shutil.rmtree(outside_dir, ignore_errors=True)
 
+    def test_relative_path_traversal_rejected(self):
+        """data/../../ 穿越路径被拒绝（errors），记录保留、文件不被移动"""
+        # DATA_ROOT 之外的真实文件
+        outside = os.path.join(self.temp_dir.name, "..", "escape_target.jpg")
+        outside = os.path.abspath(outside)
+        with open(outside, "wb") as f:
+            f.write(b"escape-me")
+        try:
+            rel_traversal = os.path.join("data", "..", "..", os.path.basename(outside))
+            fid = self.db.add_file(rel_traversal)
+            resp = self._post([fid])
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["errors"], 1)
+            self.assertIsNotNone(self.db.get_file_by_id(fid))  # 记录保留
+            self.assertTrue(os.path.exists(outside))  # 文件未被移动
+        finally:
+            os.remove(outside)
+
     def test_unknown_file_id_is_skipped(self):
         resp = self._post(["does-not-exist"])
         self.assertEqual(resp.status_code, 200)
