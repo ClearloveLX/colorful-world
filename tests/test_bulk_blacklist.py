@@ -122,6 +122,30 @@ class BulkBlacklistTestCase(unittest.TestCase):
         finally:
             os.remove(outside)
 
+    def test_symlink_escape_rejected(self):
+        """DATA_ROOT 内 symlink 指向外部时拒绝（realpath 解析；无创建权限时跳过）"""
+        outside = os.path.abspath(os.path.join(self.temp_dir.name, "..", "symlink_target.jpg"))
+        with open(outside, "wb") as f:
+            f.write(b"x")
+        try:
+            link = os.path.join(self.temp_dir.name, "evil_link")
+            try:
+                os.symlink(os.path.dirname(outside), link)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink 创建无权限")
+            try:
+                rel = os.path.join("data", "evil_link", "symlink_target.jpg")
+                fid = self.db.add_file(rel)
+                resp = self._post([fid])
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.json()["errors"], 1)
+                self.assertIsNotNone(self.db.get_file_by_id(fid))  # 记录保留
+                self.assertTrue(os.path.exists(outside))  # 外部文件未被移动
+            finally:
+                os.remove(link)
+        finally:
+            os.remove(outside)
+
     def test_unknown_file_id_is_skipped(self):
         resp = self._post(["does-not-exist"])
         self.assertEqual(resp.status_code, 200)

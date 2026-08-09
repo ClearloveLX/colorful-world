@@ -557,7 +557,9 @@ def _resolve_db_file_path(file_path):
     if s.lower().startswith('data/'):
         joined = os.path.normpath(os.path.join(DATA_ROOT, s[5:]))
         try:
-            if os.path.commonpath([os.path.abspath(DATA_ROOT), joined]) != os.path.abspath(DATA_ROOT):
+            # realpath 解析符号链接/junction，防 DATA_ROOT 内 symlink 指向外部时绕过检查
+            real_root = os.path.realpath(DATA_ROOT)
+            if os.path.commonpath([real_root, os.path.realpath(joined)]) != real_root:
                 return None
         except ValueError:
             return None
