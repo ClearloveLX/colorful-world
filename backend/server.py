@@ -21,7 +21,7 @@ logger = logging.getLogger("colorfulworld")
 from typing import List
 from pydantic import BaseModel
 
-from backend.data.database import Database
+from backend.data.database import Database, resolve_abs
 
 # CORS 白名单：生产同源访问不经过 CORS；仅 Vite dev (5173→8000) 与同源端口需要放行
 _ALLOWED_ORIGINS = [
@@ -547,24 +547,8 @@ def _bulk_update_heat(file_ids: List[str], delta: int):
     return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
 
 def _resolve_db_file_path(file_path):
-    """DB 中 file_path 可能是相对路径（data/good/...，相对 DATA_ROOT），对齐 _to_static_url 的解析。
-
-    相对路径做 normpath 逃逸检查：data/../../ 穿越会返回 None（由调用方计 errors），
-    防止 DB 路径被污染时移动 DATA_ROOT 之外的任意文件。绝对路径不做 DATA_ROOT 限制
-    （库内文件多盘分布，与客户端 add_to_blacklist 行为一致）。
-    """
-    s = str(file_path).replace('\\', '/')
-    if s.lower().startswith('data/'):
-        joined = os.path.normpath(os.path.join(DATA_ROOT, s[5:]))
-        try:
-            # realpath 解析符号链接/junction，防 DATA_ROOT 内 symlink 指向外部时绕过检查
-            real_root = os.path.realpath(DATA_ROOT)
-            if os.path.commonpath([real_root, os.path.realpath(joined)]) != real_root:
-                return None
-        except ValueError:
-            return None
-        return joined
-    return file_path
+    """DB 相对路径解析（data/ 前缀 → DATA_ROOT 绝对，含逃逸检查），对齐公共实现。"""
+    return resolve_abs(file_path, DATA_ROOT)
 
 
 def _bulk_blacklist(file_ids: List[str]):

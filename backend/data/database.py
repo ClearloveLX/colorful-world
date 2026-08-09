@@ -24,6 +24,62 @@ def compute_md5(file_path):
     return md5_hash.hexdigest()
 
 
+def get_data_root():
+    """统一数据根解析：CW_DATA_ROOT → L:\\data（存在时）→ 项目 data。
+
+    与 server.py 的 DATA_ROOT / open_helper 的 _get_data_root 保持一致，
+    避免多处实现分叉导致相对路径解析不一致。
+    """
+    env = os.environ.get('CW_DATA_ROOT')
+    if env and env.strip():
+        return os.path.abspath(env.strip())
+    candidate = r"L:\data"
+    if os.path.isdir(candidate):
+        return os.path.abspath(candidate)
+    return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data"))
+
+
+def resolve_abs(file_path, data_root=None):
+    """DB 中存储的相对路径（data/...，相对数据根）解析为绝对路径；绝对路径原样返回。
+
+    相对路径做 normpath + realpath 逃逸检查（防 data/../../ 或 symlink 指向数据根外），
+    逃逸时返回 None（由调用方决定计数策略）。
+    data_root 显式传入时优先（如 server.py 的 DATA_ROOT，可被测试 monkey-patch）。
+    """
+    if not file_path:
+        return file_path
+    root = os.path.abspath(data_root) if data_root else get_data_root()
+    s = str(file_path).replace('\\', '/')
+    if s.lower().startswith('data/'):
+        joined = os.path.normpath(os.path.join(root, s[5:]))
+        try:
+            real_root = os.path.realpath(root)
+            if os.path.commonpath([real_root, os.path.realpath(joined)]) != real_root:
+                return None
+        except ValueError:
+            return None
+        return joined
+    return file_path
+
+
+def to_rel(file_path, data_root=None):
+    """数据根内的绝对路径 → data/ 相对路径（换盘符零迁移）；其余路径原样返回。"""
+    if not file_path:
+        return file_path
+    s = str(file_path).replace('\\', '/')
+    if s.lower().startswith('data/'):
+        return file_path  # 已是相对
+    ap = os.path.abspath(str(file_path))
+    root = os.path.abspath(data_root) if data_root else get_data_root()
+    try:
+        if os.path.commonpath([root, ap]) == root:
+            rel = os.path.relpath(ap, root)
+            return os.path.join('data', rel)
+    except ValueError:
+        pass
+    return file_path
+
+
 try:
     import cv2  # 可选：仅用于视频元数据提取
 except Exception:
@@ -1596,20 +1652,23 @@ class Database:
         """添加文件记录，自动计算MD5值
 
         md5_value: 外部已算好的 MD5 时传入,跳过文件读取(避免大文件重复计算)。
+        file_path 入库前自动转为 data/ 相对路径（换盘零迁移，见 to_rel）。
         """
+        raw_path = file_path
         if file_name is None:
-            file_name = os.path.basename(file_path)
-        if file_size is None and os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
+            file_name = os.path.basename(raw_path)
+        if file_size is None and os.path.exists(raw_path):
+            file_size = os.path.getsize(raw_path)
         now = datetime.now().isoformat()
 
         # 计算MD5值(未传入时兜底计算)
-        if md5_value is None and os.path.exists(file_path):
+        if md5_value is None and os.path.exists(raw_path):
             try:
-                md5_value = compute_md5(file_path)
+                md5_value = compute_md5(raw_path)
             except Exception:
                 pass
 
+        file_path = to_rel(raw_path)
         with self.transaction() as conn:
             cursor = conn.cursor()
             file_id = self._generate_guid()
@@ -1626,12 +1685,12 @@ class Database:
                 cursor.execute('SELECT id FROM files WHERE file_path = ?', (file_path,))
                 row = cursor.fetchone()
                 return dict(row)['id'] if row else None
-    
+
     def get_file(self, file_path):
-        """根据路径获取文件记录"""
+        """根据路径获取文件记录（查询参数自动转 data/ 相对，与入库格式一致）"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM files WHERE file_path = ?', (file_path,))
+        cursor.execute('SELECT * FROM files WHERE file_path = ?', (to_rel(file_path),))
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
@@ -1662,6 +1721,7 @@ class Database:
         params = []
 
         if file_path is not None:
+            file_path = to_rel(file_path)  # 入库统一 data/ 相对
             updates.append('file_path = ?')
             params.append(file_path)
             if file_type is None:
@@ -1697,6 +1757,7 @@ class Database:
     def update_file_thumbnail(self, file_id, thumbnail_path):
         conn = self.get_connection()
         cursor = conn.cursor()
+        thumbnail_path = to_rel(thumbnail_path)  # 入库统一 data/ 相对
         cursor.execute('UPDATE files SET thumbnail_path = ?, updated_at = ? WHERE id = ?', (thumbnail_path, datetime.now().isoformat(), file_id))
         conn.commit()
         conn.close()
@@ -2147,6 +2208,12 @@ class Database:
         cursor.execute(base_sql, params)
         rows = [dict(r) for r in cursor.fetchall()]
         conn.close()
+        # 查询出口统一解析为绝对路径（DB 存 data/ 相对，调用方直接做文件系统操作）
+        for row in rows:
+            if row.get('file_path'):
+                row['file_path'] = resolve_abs(row['file_path'])
+            if row.get('thumbnail_path'):
+                row['thumbnail_path'] = resolve_abs(row['thumbnail_path'])
         return rows
 
     def get_app_setting(self, setting_key, default_value=None):
@@ -2548,6 +2615,12 @@ class Database:
         files = self._query('SELECT * FROM files ORDER BY created_at DESC')
         if not files:
             return []
+        # 查询出口统一解析为绝对路径（DB 存 data/ 相对）
+        for f in files:
+            if f.get('file_path'):
+                f['file_path'] = resolve_abs(f['file_path'])
+            if f.get('thumbnail_path'):
+                f['thumbnail_path'] = resolve_abs(f['thumbnail_path'])
         file_ids = [f['id'] for f in files]
         models_map = self.get_files_models_batch(file_ids)
         tags_map = self.get_files_tags_batch(file_ids)

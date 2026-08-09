@@ -18,19 +18,10 @@ import subprocess
 import functools
 from collections import OrderedDict
 
-from backend.data.database import Database, compute_md5
+from backend.data.database import Database, compute_md5, get_data_root, resolve_abs
 from backend.services.file_manager import FileManager
 
-# 数据根目录可通过环境变量 CW_DATA_ROOT 配置，默认使用项目内的 data 目录
-def get_data_root():
-    try:
-        env = os.environ.get('CW_DATA_ROOT')
-        if env:
-            return os.path.abspath(env)
-    except Exception:
-        pass
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), 'data'))
-
+# 数据根目录统一解析（CW_DATA_ROOT → L:\data → 项目 data），来自 backend.data.database
 def _win_logical_cmp(a, b):
     try:
         return ctypes.windll.Shlwapi.StrCmpLogicalW(str(a), str(b))
@@ -4623,65 +4614,7 @@ class ImageClassifierApp:
         
         # 存储文件数据
         displayed_files = []
-        
-        def _resolve_path_for_browser(p):
-            if not p:
-                return p
-            s = str(p)
-            if os.path.exists(s):
-                return s
-            try:
-                proj_data = os.path.abspath(os.path.join(os.path.dirname(__file__), 'data'))
-                data_root = get_data_root()
-                s_norm = os.path.normcase(os.path.normpath(s))
-                proj_norm = os.path.normcase(proj_data)
-                if s_norm.startswith(proj_norm + os.sep) or s_norm == proj_norm:
-                    try:
-                        rel = os.path.relpath(s_norm, proj_norm)
-                        cand = os.path.join(data_root, rel)
-                        if os.path.exists(cand):
-                            return cand
-                    except Exception:
-                        pass
-                s_slash = s.replace("\\", "/")
-                if s_slash.lower().startswith("data/"):
-                    try:
-                        rel = s_slash[5:]
-                        cand = os.path.join(data_root, rel)
-                        if os.path.exists(cand):
-                            return cand
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            return s
-        
-        def _normalize_record_for_browser(file):
-            try:
-                p = file.get('file_path')
-                tp = file.get('thumbnail_path')
-                np = _resolve_path_for_browser(p) if p else p
-                ntp = _resolve_path_for_browser(tp) if tp else tp
-                if np and np != p:
-                    file['file_path'] = np
-                    try:
-                        fid = file.get('id')
-                        if fid and os.path.exists(np):
-                            self.db.update_file(fid, file_path=np, file_size=os.path.getsize(np))
-                    except Exception:
-                        pass
-                if ntp and ntp != tp:
-                    file['thumbnail_path'] = ntp
-                    try:
-                        fid = file.get('id')
-                        if fid and os.path.exists(ntp):
-                            self.db.update_file_thumbnail(fid, ntp)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            return file
-        
+
         def format_file_size(size_bytes):
             """格式化文件大小"""
             if size_bytes is None:
@@ -4696,7 +4629,6 @@ class ImageClassifierApp:
 
         def append_files(files):
             for file in files:
-                file = _normalize_record_for_browser(file)
                 file_path = file.get('file_path')
                 file_name = file.get('original_file_name') or file.get('file_name') or os.path.basename(file_path or '')
                 file_id = file['id']
@@ -4750,6 +4682,12 @@ class ImageClassifierApp:
                 rows = [dict(r) for r in cursor.fetchall()]
                 if not rows:
                     continue
+                # 裸查询出口补解析（DB 存 data/ 相对路径）
+                for r in rows:
+                    if r.get('file_path'):
+                        r['file_path'] = resolve_abs(r['file_path'])
+                    if r.get('thumbnail_path'):
+                        r['thumbnail_path'] = resolve_abs(r['thumbnail_path'])
                 keep = rows[0]
                 keep_id = keep.get('id')
                 keep_name = keep.get('original_file_name') or keep.get('file_name') or os.path.basename(keep.get('file_path') or '')
@@ -4788,7 +4726,6 @@ class ImageClassifierApp:
                 return False
 
         def _move_to_bad_and_delete(file):
-            file = _normalize_record_for_browser(file)
             file_path = file.get('file_path')
             file_id = file.get('id')
             bad_folder = os.path.join(get_data_root(), "bad")
@@ -4922,7 +4859,7 @@ class ImageClassifierApp:
             hide_preview_tip()
             if idx < 0 or idx >= len(displayed_files):
                 return
-            file = _normalize_record_for_browser(displayed_files[idx])
+            file = displayed_files[idx]
             path = file.get('thumbnail_path') or file.get('file_path')
             if not path or not os.path.exists(path):
                 return
@@ -4967,8 +4904,8 @@ class ImageClassifierApp:
             idx = selection[0]
             if idx >= len(displayed_files):
                 return
-            
-            file = _normalize_record_for_browser(displayed_files[idx])
+
+            file = displayed_files[idx]
             file_path = file['file_path']
             file_id = file['id']
             
@@ -5105,7 +5042,7 @@ class ImageClassifierApp:
             idx = selection[0]
             if idx >= len(displayed_files):
                 return
-            file = _normalize_record_for_browser(displayed_files[idx])
+            file = displayed_files[idx]
             file_path = file['file_path']
             file_id = file['id']
             
@@ -5432,7 +5369,7 @@ class ImageClassifierApp:
             idx = selection[0]
             if idx >= len(displayed_files):
                 return
-            file = _normalize_record_for_browser(displayed_files[idx])
+            file = displayed_files[idx]
             file_path = file['file_path']
             if not os.path.exists(file_path):
                 messagebox.showerror("错误", "文件不存在")
