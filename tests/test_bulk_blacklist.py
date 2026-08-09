@@ -72,19 +72,37 @@ class BulkBlacklistTestCase(unittest.TestCase):
         self.assertEqual(resp.json()["updated"], 1)
         self.assertIsNone(self.db.get_file_by_id(self.id_b))
 
-    def test_outside_data_root_is_error(self):
-        outside = os.path.join(self.temp_dir.name, "..", "outside.jpg")
-        outside = os.path.abspath(outside)
-        with open(outside, "wb") as f:
-            f.write(b"x")
+    def test_relative_db_path_resolved_under_data_root(self):
+        """DB 中相对路径（data/good/...）按 DATA_ROOT 解析，能正确移动并删除记录"""
+        rel = os.path.join("data", "good", "rel.jpg")
+        real = os.path.join(self.temp_dir.name, "good", "rel.jpg")
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        with open(real, "wb") as f:
+            f.write(b"relative-path-file")
+        fid = self.db.add_file(rel)  # DB 存相对路径
+        resp = self._post([fid])
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["updated"], 1)
+        self.assertIsNone(self.db.get_file_by_id(fid))
+        self.assertTrue(os.path.exists(os.path.join(self.temp_dir.name, "bad", "rel.jpg")))
+        self.assertFalse(os.path.exists(real))
+
+    def test_absolute_path_outside_data_root_moves(self):
+        """DATA_ROOT 之外的绝对路径文件同样能移入 bad（与客户端行为一致，库内文件多盘分布）"""
+        outside_dir = tempfile.mkdtemp(prefix="cw_outside_")
         try:
+            outside = os.path.join(outside_dir, "outside.jpg")
+            with open(outside, "wb") as f:
+                f.write(b"outside-file")
             fid = self.db.add_file(outside)
             resp = self._post([fid])
             self.assertEqual(resp.status_code, 200)
-            self.assertEqual(resp.json()["errors"], 1)
-            self.assertIsNotNone(self.db.get_file_by_id(fid))  # 记录保留
+            self.assertEqual(resp.json()["updated"], 1)
+            self.assertIsNone(self.db.get_file_by_id(fid))
+            self.assertTrue(os.path.exists(os.path.join(self.temp_dir.name, "bad", "outside.jpg")))
+            self.assertFalse(os.path.exists(outside))
         finally:
-            os.remove(outside)
+            shutil.rmtree(outside_dir, ignore_errors=True)
 
     def test_unknown_file_id_is_skipped(self):
         resp = self._post(["does-not-exist"])

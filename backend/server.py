@@ -546,11 +546,20 @@ def _bulk_update_heat(file_ids: List[str], delta: int):
             errors += 1
     return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
 
+def _resolve_db_file_path(file_path):
+    """DB 中 file_path 可能是相对路径（data/good/...，相对 DATA_ROOT），对齐 _to_static_url 的解析。"""
+    s = str(file_path).replace('\\', '/')
+    if s.lower().startswith('data/'):
+        return os.path.join(DATA_ROOT, s[5:])
+    return file_path
+
+
 def _bulk_blacklist(file_ids: List[str]):
     """批量加入黑名单：移动到 DATA_ROOT/bad + 删除数据库记录。
 
     文件缺失时仍删记录（记录已无意义）；move 失败时不删记录。
-    路径必须落在 DATA_ROOT 内（防御 DB 路径被污染时移动任意路径）。
+    路径不做 DATA_ROOT 限制：库内文件分布多盘（与客户端 add_to_blacklist 行为一致），
+    相对路径（data/good/...）按 DATA_ROOT 解析。
     """
     updated = 0
     skipped = 0
@@ -566,14 +575,7 @@ def _bulk_blacklist(file_ids: List[str]):
             if not file_path:
                 skipped += 1
                 continue
-            ap = os.path.abspath(file_path)
-            try:
-                if os.path.commonpath([root, ap]) != root:
-                    errors += 1
-                    continue
-            except ValueError:
-                errors += 1
-                continue
+            ap = os.path.abspath(_resolve_db_file_path(file_path))
             if os.path.isfile(ap):
                 bad_folder = os.path.join(root, "bad")
                 # 已在黑名单文件夹时跳过移动（与客户端 add_to_blacklist 一致）
