@@ -547,10 +547,21 @@ def _bulk_update_heat(file_ids: List[str], delta: int):
     return {"ok": True, "updated": updated, "skipped": skipped, "errors": errors}
 
 def _resolve_db_file_path(file_path):
-    """DB 中 file_path 可能是相对路径（data/good/...，相对 DATA_ROOT），对齐 _to_static_url 的解析。"""
+    """DB 中 file_path 可能是相对路径（data/good/...，相对 DATA_ROOT），对齐 _to_static_url 的解析。
+
+    相对路径做 normpath 逃逸检查：data/../../ 穿越会返回 None（由调用方计 errors），
+    防止 DB 路径被污染时移动 DATA_ROOT 之外的任意文件。绝对路径不做 DATA_ROOT 限制
+    （库内文件多盘分布，与客户端 add_to_blacklist 行为一致）。
+    """
     s = str(file_path).replace('\\', '/')
     if s.lower().startswith('data/'):
-        return os.path.join(DATA_ROOT, s[5:])
+        joined = os.path.normpath(os.path.join(DATA_ROOT, s[5:]))
+        try:
+            if os.path.commonpath([os.path.abspath(DATA_ROOT), joined]) != os.path.abspath(DATA_ROOT):
+                return None
+        except ValueError:
+            return None
+        return joined
     return file_path
 
 
@@ -575,7 +586,11 @@ def _bulk_blacklist(file_ids: List[str]):
             if not file_path:
                 skipped += 1
                 continue
-            ap = os.path.abspath(_resolve_db_file_path(file_path))
+            ap = _resolve_db_file_path(file_path)
+            if ap is None:
+                errors += 1
+                continue
+            ap = os.path.abspath(ap)
             if os.path.isfile(ap):
                 bad_folder = os.path.join(root, "bad")
                 # 已在黑名单文件夹时跳过移动（与客户端 add_to_blacklist 一致）
