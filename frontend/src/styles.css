@@ -228,6 +228,26 @@ body {
   letter-spacing: 0;
 }
 
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.refresh-btn:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+.refresh-btn.spinning {
+  animation: spin 0.7s linear infinite;
+}
+
 .file-count {
   color: var(--text-tertiary);
   font-size: 11px;
