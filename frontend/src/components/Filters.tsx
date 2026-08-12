@@ -61,6 +61,8 @@ export default function Filters({
 }: Props) {
   const [models, setModels] = useState<Model[]>([])
   const [tags, setTags] = useState<Tag[]>([])
+  const [refreshingTags, setRefreshingTags] = useState(false)
+  const [refreshingModels, setRefreshingModels] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
   const [tagSearch, setTagSearch] = useState('')
 
@@ -137,6 +139,14 @@ export default function Filters({
       e.preventDefault()
       fn()
     }
+  }
+  const refreshTags = () => {
+    setRefreshingTags(true)
+    fetchTags().then(setTags).finally(() => setRefreshingTags(false))
+  }
+  const refreshModels = () => {
+    setRefreshingModels(true)
+    fetchModels().then(setModels).finally(() => setRefreshingModels(false))
   }
   return (
     <div className="sidebar">
@@ -364,6 +374,17 @@ export default function Filters({
         >
           <span className="section-name">模特</span>
           <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <button
+              className={`refresh-btn${refreshingModels ? ' spinning' : ''}`}
+              title="刷新模特计数"
+              aria-label="刷新模特"
+              onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshModels(); }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <polyline points="21 3 21 9 15 9" />
+              </svg>
+            </button>
             <span className={`caret${sectionOpen.models ? ' open' : ''}`} />
             <span className="badge-count">{models.length}</span>
           </span>
@@ -423,6 +444,17 @@ export default function Filters({
         >
           <span className="section-name">标签</span>
           <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <button
+              className={`refresh-btn${refreshingTags ? ' spinning' : ''}`}
+              title="刷新标签计数"
+              aria-label="刷新标签"
+              onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshTags(); }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <polyline points="21 3 21 9 15 9" />
+              </svg>
+            </button>
             <span className={`caret${sectionOpen.tags ? ' open' : ''}`} />
             <span className="badge-count">{tags.length}</span>
           </span>
