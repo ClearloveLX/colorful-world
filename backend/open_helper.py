@@ -64,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/open":
             # CSRF 防护：Origin/Referer 缺失或非本机来源的请求直接拒绝
-            # （server.py 内部调用已显式携带 Origin: http://127.0.0.1:8001）
+            # （server.py 内部调用已显式携带 Origin: http://127.0.0.1:4397）
             if not _is_local_origin(self.headers):
                 self._send_json({"ok": False}, code=403)
                 return
@@ -117,7 +117,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    port = 8001
+    port = 4397
     server = HTTPServer(('127.0.0.1', port), Handler)
     print(f"Open helper listening on http://127.0.0.1:{port}")
     try:

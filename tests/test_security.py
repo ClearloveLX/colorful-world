@@ -132,10 +132,10 @@ class OpenHelperValidationTestCase(unittest.TestCase):
     def test_local_origin_accepted(self):
         import email.message
         headers = email.message.Message()
-        headers["Origin"] = "http://127.0.0.1:8000"
+        headers["Origin"] = "http://127.0.0.1:4396"
         self.assertTrue(_is_local_origin(headers))
         headers = email.message.Message()
-        headers["Origin"] = "http://localhost:5173"
+        headers["Origin"] = "http://localhost:4398"
         self.assertTrue(_is_local_origin(headers))
 
     def test_foreign_origin_rejected(self):

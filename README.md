@@ -1,6 +1,6 @@
 # ColorfulWorld
 
-一个本地图片管理与筛选的前后端项目，启动后访问 http://localhost:8000/ 进行使用。
+一个本地图片管理与筛选的前后端项目，启动后访问 http://localhost:4396/ 进行使用。
 
 ## 依赖安装
 
@@ -32,7 +32,7 @@ npm install
 cd frontend
 npm run build
 cd ..
-.\.venv\Scripts\python.exe -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn backend.server:app --host 0.0.0.0 --port 4396
 ```
 
 ### 数据处理（Windows）

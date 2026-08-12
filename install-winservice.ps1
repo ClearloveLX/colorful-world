@@ -1,6 +1,6 @@
 param(
   [string]$Name = 'ColorfulWorldApiService',
-  [int]$Port = 8000,
+  [int]$Port = 4396,
   [string]$Bind = '0.0.0.0',
   [switch]$BuildFrontend
 )

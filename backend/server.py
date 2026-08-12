@@ -23,12 +23,12 @@ from pydantic import BaseModel
 
 from backend.data.database import Database, resolve_abs
 
-# CORS 白名单：生产同源访问不经过 CORS；仅 Vite dev (5173→8000) 与同源端口需要放行
+# CORS 白名单：生产同源访问不经过 CORS；仅 Vite dev (4398→4396) 与同源端口需要放行
 _ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
+    "http://localhost:4396",
+    "http://127.0.0.1:4396",
+    "http://localhost:4398",
+    "http://127.0.0.1:4398",
 ]
 
 # 登录流程自身所需的端点豁免鉴权；其余全部 /api/* 必须携带有效访问码。
@@ -485,9 +485,9 @@ def _open_in_system(p: str, raw_path: str) -> bool:
         except Exception:
             pass
         try:
-            u = "http://127.0.0.1:8001/open?path=" + urllib.parse.quote(raw_path)
+            u = "http://127.0.0.1:4397/open?path=" + urllib.parse.quote(raw_path)
             # open_helper 要求 Origin 存在且为本机来源（缺失时拒绝），内部调用需显式携带
-            req = urllib.request.Request(u, method="POST", headers={"Origin": "http://127.0.0.1:8001"})
+            req = urllib.request.Request(u, method="POST", headers={"Origin": "http://127.0.0.1:4397"})
             urllib.request.urlopen(req, timeout=1)
             return True
         except Exception:

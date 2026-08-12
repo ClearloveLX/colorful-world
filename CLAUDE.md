@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# One-click launch (Windows PowerShell) - auto-creates venv, installs deps, builds frontend, starts open helper + server on :8000
+# One-click launch (Windows PowerShell) - auto-creates venv, installs deps, builds frontend, starts open helper + server on :4396
 .\start.ps1
 
 # Manual setup: install backend + frontend deps
@@ -14,9 +14,9 @@ cd frontend && npm ci && cd ..
 
 # Manual: build frontend, then start backend (production mode, no hot reload)
 cd frontend && npm run build && cd ..
-.\.venv\Scripts\python.exe -m uvicorn backend.server:app --host 0.0.0.0 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn backend.server:app --host 0.0.0.0 --port 4396
 
-# Frontend dev server with hot reload (Vite on :5173, proxies /api → :8000)
+# Frontend dev server with hot reload (Vite on :4398, proxies /api → :4396)
 cd frontend && npm run dev
 
 # Launch Tkinter desktop GUI (image classification tool)
@@ -45,7 +45,7 @@ cd frontend && npm test
 .\install-winservice.ps1
 .\uninstall-winservice.ps1
 
-# Free port 8000 if something is occupying it
+# Free the default app port (4396) if something is occupying it
 .\tools\free_port_8000.ps1
 ```
 
@@ -57,24 +57,24 @@ This is a **local media gallery** for browsing, filtering, and managing images/v
 
 | Server | Port | Technology | Purpose |
 |--------|------|------------|---------|
-| `backend/server.py` | 8000 | FastAPI + uvicorn | Primary: REST API + built frontend static files |
+| `backend/server.py` | 4396 | FastAPI + uvicorn | Primary: REST API + built frontend static files |
 | `backend/simple_server.py` | 3000 | Python stdlib `http.server` | Lightweight read-only alternative (no FastAPI needed) |
-| `backend/open_helper.py` | 8001 | Python stdlib `http.server` | Single endpoint `POST /open` — opens files in system default app |
+| `backend/open_helper.py` | 4397 | Python stdlib `http.server` | Single endpoint `POST /open` — opens files in system default app |
 
 **Why two separate HTTP servers?** `open_helper.py` is launched in the user's desktop session (via `run_open_helper.ps1`) because `ShellExecuteW`/`os.startfile` requires running in the user's session. The FastAPI server may run in a different context (e.g. Windows service) and cannot directly launch GUI apps.
 
-**open_helper origin rule (don't regress):** `_is_local_origin()` rejects requests with NO Origin/Referer header (missing → rejected, not allowed); `server.py`'s internal call (`/api/open` fallback) explicitly sends `Origin: http://127.0.0.1:8001` to satisfy it. Any new internal caller must do the same.
+**open_helper origin rule (don't regress):** `_is_local_origin()` rejects requests with NO Origin/Referer header (missing → rejected, not allowed); `server.py`'s internal call (`/api/open` fallback) explicitly sends `Origin: http://127.0.0.1:4397` to satisfy it. Any new internal caller must do the same.
 
 `simple_server.py` is a minimal read-only alternative — no password, no presets, no true-random cache, no write operations, loads entire dataset into memory. Security constraints (don't regress): binds `127.0.0.1` only (it has no auth), refuses `.db`/`.sqlite`/`.bak` files via `_is_blacklisted()`, and `db` is lazily initialized via `_db()` so importing the module has no DB side effects. Import uses a try/except dual path (`data.database` vs `backend.data.database`).
 
 ### 1. Web App (primary)
-- **Backend**: FastAPI (`backend/server.py`) on port 8000. Serves REST API + built frontend static files from `frontend/dist/`. A single process handles both.
+- **Backend**: FastAPI (`backend/server.py`) on port 4396. Serves REST API + built frontend static files from `frontend/dist/`. A single process handles both.
 - **Frontend**: React 18 + TypeScript + Vite (`frontend/`). Masonry-layout media grid with collapsible sidebar filters (models, tags with categories, heat range, name search), lightbox viewer, bulk tag/heat operations in edit mode, password-gated access.
   - Entry point: `frontend/src/main.tsx` → `App.tsx`
   - Types: `frontend/src/types.ts` defines `Model`, `Tag`, `MediaItem`, `ID`
   - API layer: `frontend/src/api.ts` — `getRetry()` retries 3x with 400ms delay; `get()` uses 15s AbortController timeout; `fetchMedia()` has custom retry (not `getRetry`, uses its own 600ms delay retry in `MediaGrid`)
 - **Data root**: Controlled by `CW_DATA_ROOT` env var. Defaults to `L:\data` if that drive exists, otherwise `./data`. File paths served via base64-encoded query params (`/api/file?path=...`) to support files on any drive.
-- **Vite dev config** (`frontend/vite.config.ts`): `strictPort: true` on 5173, proxies `/api` → `localhost:8000`.
+- **Vite dev config** (`frontend/vite.config.ts`): `strictPort: true` on 4398, proxies `/api` → `localhost:4396`.
 
 ### 2. Desktop GUI (`main.py`, ~5500 lines — includes image classification UI)
 - Tkinter-based image classifier (`ImageClassifierApp`). Used for initial ingestion and tagging workflow. Shares the same `Database` and `FileManager` classes.
@@ -209,8 +209,8 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 ### Startup Flow (`start.ps1`)
 1. Ensures Python venv exists, installs backend deps (fastapi, uvicorn, etc.)
 2. Builds frontend (`npm ci`/`npm install` → `npm run build`)
-3. Launches `run_open_helper.ps1` to start `open_helper.py` on port 8001 in user session
-4. Starts FastAPI server on port 8000 (serves both API and built frontend static files)
+3. Launches `run_open_helper.ps1` to start `open_helper.py` on port 4397 in user session
+4. Starts FastAPI server on port 4396 (serves both API and built frontend static files)
 
 ### Environment Variables
 - `CW_DATA_ROOT` — media files directory (default: `L:\data` if exists, else `./data`)
@@ -233,6 +233,6 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 - **`install-winservice.ps1` / `uninstall-winservice.ps1`** — install/uninstall as a Windows service via NSSM (`tools/nssm/nssm.exe`).
 - **`安装依赖.bat`** — Chinese-language helper to install Python + npm dependencies.
 - **`tools/cleanup_service.ps1`** — remove stale Windows service registrations.
-- **`tools/free_port_8000.ps1`** — kill any process occupying port 8000.
+- **`tools/free_port_8000.ps1`** — kill any process occupying the default app port (4396).
 - **`docs/presets-api.md`** — presets API reference.
 - **`docs/presets-test-report.md`** — presets test coverage report.
