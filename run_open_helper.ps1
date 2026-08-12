@@ -18,7 +18,7 @@ if (-not (Test-Path $py)) {
   if ($pythonCmd) { $py = $pythonCmd.Path } else { throw "Python not found" }
 }
 
-Info "Starting open helper on 127.0.0.1:8001"
+Info "Starting open helper on 127.0.0.1:4397"
 if ($Hidden) {
   Start-Process -WindowStyle Hidden -FilePath $py -ArgumentList "-m backend.open_helper"
 } else {

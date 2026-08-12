@@ -1,5 +1,5 @@
 param(
-  [int]$Port = 8000
+  [int]$Port = 4396
 )
 
 Set-StrictMode -Version Latest

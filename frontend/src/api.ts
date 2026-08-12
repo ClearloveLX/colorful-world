@@ -202,8 +202,8 @@ export async function bulkBlacklist(fileIds: string[]): Promise<{ ok: boolean; u
   return r.json()
 }
 
-// open_helper 固定监听本机 8001（由 run_open_helper.ps1 启动）
-const OPEN_HELPER_URL = 'http://127.0.0.1:8001'
+// open_helper 固定监听本机 4397（由 run_open_helper.ps1 启动）
+const OPEN_HELPER_URL = 'http://127.0.0.1:4397'
 
 export async function openInSystem(filePath: string): Promise<boolean> {
   if (!filePath) return false
