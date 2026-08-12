@@ -2266,6 +2266,8 @@ class ImageClassifierApp:
             def save_worker():
                 try:
                     file_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else None
+                    # 记录本次保存前该源文件是否已入库,异常兜底时只删本次新建的记录
+                    pre_existing = bool(self.db.get_file(vid_path))
                     file_id = self.db.add_file(vid_path, file_name=os.path.basename(vid_path), file_size=file_size)
                     base_folder = os.path.join(get_data_root(),'good', str(model_id))
                     os.makedirs(base_folder, exist_ok=True)
@@ -2294,7 +2296,10 @@ class ImageClassifierApp:
                     new_filename = f"{file_id}{ext}"
                     new_path = os.path.join(target_folder, new_filename)
                     if os.path.exists(new_path):
-                        os.remove(new_path)
+                        # 目标已存在(重复保存同一源文件):加时间戳后缀,不覆盖已有文件
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        new_filename = f"{file_id}_{timestamp}{ext}"
+                        new_path = os.path.join(target_folder, new_filename)
                     shutil.move(vid_path, new_path)
                     if thumb_snapshot is not None:
                         full_img = thumb_snapshot
@@ -2348,6 +2353,13 @@ class ImageClassifierApp:
                     vp.after(0, after_success)
                 except Exception as e:
                     err_msg = str(e)
+                    # 中途失败兜底:记录为本次新建且已入库时删除,避免残留指向无效路径的记录
+                    # (move 已成功时视频文件保留在目标目录,可手动找回)
+                    if file_id and not pre_existing:
+                        try:
+                            self.db.delete_file(file_id)
+                        except Exception:
+                            pass
                     def after_fail(msg=err_msg):
                         messagebox.showerror("错误", f"保存失败:\n{msg}")
                         save_btn.config(state=tk.NORMAL)
