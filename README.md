@@ -9,7 +9,6 @@
 - **多维筛选**：按模特、标签（含排除标签）、热度区间、名称搜索筛选媒体
 - **随机浏览**：真随机模式基于缓存黑名单，同一批结果不重复出现
 - **批量操作**：批量添加/移除标签、调整热度值
-- **人脸聚类与相似检测**：基于 insightface 的人脸聚类，dHash + 颜色直方图 + 人脸特征三重判重的相似图片检测
 - **桌面分类工具**：Tkinter GUI，用于初始采集、分类标记与数据库浏览，键盘快捷键驱动
 - **本地优先**：全部数据存储在本机，离线可用
 
@@ -21,7 +20,7 @@
 | 前端 | React 18 + TypeScript + Vite (dev 端口 4398) |
 | 数据库 | SQLite (WAL 模式，自动迁移) |
 | 辅助服务 | open_helper (端口 4397，用户会话内打开系统应用) |
-| 依赖 | opencv-python、Pillow、numpy、mutagen、insightface |
+| 依赖 | opencv-python、Pillow、numpy、mutagen |
 
 ## 环境变量
 
