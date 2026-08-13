@@ -169,10 +169,6 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 5. **10-minute idle lockout**: listens to mouse/keyboard/scroll/touch events; after 600s of inactivity → re-locks (input cleared, password unchanged)
 6. No JWT, no token management on the frontend — the httpOnly cookie is the session
 
-### Face Clustering & Image Similarity
-- **`backend/services/face_cluster.py`**: Uses `insightface` (`buffalo_l` model, CPU only). Lazy init — sentinel `_face_model = False` prevents retrying failed loads. `detect_faces()` returns `[{bbox, embedding}]`, `cluster_faces()` uses Union-Find with O(n^2) pairwise cosine similarity (threshold 0.45).
-- **`backend/services/image_similarity.py`**: Three-feature duplicate detection — dHash (64-bit difference hash, Hamming distance ≤10), HSV histogram correlation (≥0.85), and face embedding similarity (0.45). `find_similar_groups_safe()` wraps everything in try/except and returns `[]` on failure. Low-detail images (dHash bit_count ≤10) skip dHash comparison.
-
 ### Key API Endpoints (all under `/api/`)
 
 **Media query:**
@@ -219,8 +215,7 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 - `CW_PASSWORD_ROTATE` — set to `0` to disable password rotation on page load
 
 ### Dependencies
-- **Backend** (`requirements.txt`): opencv-python>=4.8.0, Pillow>=10.0.0, numpy>=1.24.0, fastapi>=0.115.0, uvicorn[standard]>=0.32.0, mutagen>=1.47.0, insightface>=0.7.0
-  - `insightface` downloads `buffalo_l` model (~500MB) on first use
+- **Backend** (`requirements.txt`): opencv-python>=4.8.0, Pillow>=10.0.0, numpy>=1.24.0, fastapi>=0.115.0, uvicorn[standard]>=0.32.0, mutagen>=1.47.0
   - `mutagen` for mp3/m4a audio duration extraction
 - **Frontend** (`package.json`): React 18, TypeScript 5, Vite 5 — no UI framework, no state management library, no CSS framework. Dev deps: `@types/react`, `@types/react-dom`, `@vitejs/plugin-react`, `typescript`, `vite`, `vitest`
 
