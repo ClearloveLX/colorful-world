@@ -15,6 +15,9 @@ import urllib.request
 import urllib.parse
 import ctypes
 import shutil
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 
 logger = logging.getLogger("colorfulworld")
@@ -91,6 +94,41 @@ else:
 app.mount("/api/static", StaticFiles(directory=STATIC_BASE), name="static")
 
 db = Database()
+
+# 缺失 file_size 的记录在旧数据中偶尔存在。按路径缓存 stat 结果,
+# 避免每次翻页都去媒体盘做 isfile/getsize 两次元数据读取(减少盘片寻道与磨损)。
+_file_size_lock = threading.Lock()
+_file_size_cache = OrderedDict()  # path -> (size, expire_monotonic)
+_FILE_SIZE_CACHE_MAX = 8192
+_FILE_SIZE_CACHE_TTL = 30.0
+
+
+def _get_cached_file_size(p):
+    if not p:
+        return None
+    try:
+        abs_p = os.path.abspath(str(p))
+    except Exception:
+        return None
+    now = time.monotonic()
+    with _file_size_lock:
+        hit = _file_size_cache.get(abs_p)
+        if hit is not None and hit[1] > now:
+            return hit[0]
+        if hit is not None:
+            _file_size_cache.pop(abs_p, None)
+    try:
+        st = os.stat(abs_p)
+    except OSError:
+        return None
+    size = int(st.st_size) if st.st_size else None
+    with _file_size_lock:
+        _file_size_cache[abs_p] = (size, now + _FILE_SIZE_CACHE_TTL)
+        _file_size_cache.move_to_end(abs_p)
+        while len(_file_size_cache) > _FILE_SIZE_CACHE_MAX:
+            _file_size_cache.popitem(last=False)
+    return size
+
 
 def _normalize_media_type(media_type: str) -> str:
     value = (media_type or '').strip().lower()
@@ -192,6 +230,12 @@ def get_models():
 def get_tags():
     tags = db.get_tags_with_category_name(only_active=False)
     return [{"id": t["id"], "name": t["name"], "category_name": t.get("category_name") or None, "file_count": t.get("file_count", 0)} for t in tags]
+
+@app.post("/api/tags/recalc")
+def recalc_tag_counts():
+    """全量重算 tags.file_count（直接关联 ∪ 模特继承去重），纠正增量维护漂移"""
+    db.recalc_tag_file_counts()
+    return {"ok": True}
 
 class PresetPayload(BaseModel):
     name: str
@@ -308,6 +352,7 @@ def get_media(
     name: Optional[str] = Query(default=None),
     edit_mode: bool = False,
     true_random: bool = False,
+    cursor: Optional[str] = Query(default=None),
 ):
     try:
         mset = [s for s in (model_ids or '').split(',') if s]
@@ -341,18 +386,21 @@ def get_media(
             seed=seed,
             name=name,
             blacklist_cache_key=blacklist_cache_key,
+            cursor=(cursor or None) if effective_order in ('recent', 'recent_asc', 'duration', 'duration_asc', 'heat', 'heat_asc') else None,
         )
         if use_true_random_cache and rows:
             db.cache_true_random_results(blacklist_cache_key, [row.get('id') for row in rows if row.get('id')])
         file_ids = [f['id'] for f in rows]
-        file_models_map = db.get_files_models_batch(file_ids)
-        file_tags_map = db.get_files_tags_batch(file_ids)
+        # 卡片/灯箱只需要 id/name/type 等元数据;不读 base64 预览大字段,
+        # 既加快查询也避免把 1MB+ 的预览塞进每页 /api/media 响应。
+        file_models_map = db.get_files_models_batch(file_ids, include_preview=False)
+        file_tags_map = db.get_files_tags_batch(file_ids, include_preview=False)
         all_model_ids = set()
         for models in file_models_map.values():
             for m in models:
                 all_model_ids.add(m['id'])
-        model_tags_map = db.get_models_tags_batch(list(all_model_ids))
-        tag_rows = db.get_tags_with_category_name(only_active=False, with_file_count=False)
+        model_tags_map = db.get_models_tags_batch(list(all_model_ids), include_preview=False)
+        tag_rows = db.get_tags_with_category_name(only_active=False, with_file_count=False, include_preview=False)
         tag_meta = { r['id']: {
             'name': r['name'],
             'category_id': r.get('category_id'),
@@ -395,8 +443,10 @@ def get_media(
             if not sz:
                 try:
                     p = f.get("file_path")
-                    if p and os.path.isfile(p):
-                        sz = os.path.getsize(p)
+                    if p:
+                        # DB 里的相对路径统一按 DATA_ROOT 解析,绝对路径原样使用
+                        p = resolve_abs(p, data_root=DATA_ROOT)
+                        sz = _get_cached_file_size(p)
                 except Exception:
                     sz = None
             ft = (f.get("file_type") or "").lower()
@@ -646,8 +696,8 @@ def get_file(path: str, request: Request):
                 media_type=ct,
             )
         except Exception:
-            return FileResponse(p, media_type=ct)
-    return FileResponse(p, media_type=ct)
+            return FileResponse(p, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
+    return FileResponse(p, media_type=ct, headers={"Cache-Control": "public, max-age=3600"})
 
 @app.head("/api/file")
 def head_file(path: str):

@@ -557,6 +557,7 @@ class ImageClassifierApp:
         toolbar.pack(fill=tk.X, padx=5, pady=5)
         
         ttk.Button(toolbar, text="选择源文件夹", command=self.select_source_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar, text="批量导入", command=self.open_batch_import_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar, text="刷新列表", command=self.scan_folder).pack(side=tk.LEFT, padx=5)
 
         ttk.Button(toolbar, text="模特管理", command=self.open_model_manager).pack(side=tk.LEFT, padx=5)
@@ -864,6 +865,294 @@ class ImageClassifierApp:
         self.status_label.config(text=f"共 {len(self.image_files)} 个文件")
         self.current_image_index = -1
 
+    # ========== 批量导入 ==========
+
+    def open_batch_import_dialog(self):
+        """批量导入：一次性选好标签/模特，把整个文件夹按规则全部入库"""
+        win = tk.Toplevel(self.root)
+        win.title("批量导入")
+        win.geometry("540x660")
+        win.transient(self.root)
+        win.grab_set()
+
+        # ── 源文件夹 ──
+        row = ttk.Frame(win)
+        row.pack(fill=tk.X, padx=12, pady=(12, 4))
+        ttk.Label(row, text="源文件夹:").pack(side=tk.LEFT)
+        folder_var = tk.StringVar()
+        folder_entry = ttk.Entry(row, textvariable=folder_var)
+        folder_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+
+        def browse_folder():
+            f = filedialog.askdirectory(title="选择要批量导入的文件夹", parent=win)
+            if f:
+                folder_var.set(f)
+        ttk.Button(row, text="浏览…", command=browse_folder).pack(side=tk.LEFT)
+
+        # ── 选项 ──
+        opts = ttk.Frame(win)
+        opts.pack(fill=tk.X, padx=12, pady=4)
+        # 默认不递归、不去重；默认剪切（与单文件保存一致），MD5 重复的文件跳过时不移动，保留在源文件夹
+        recursive_var = tk.BooleanVar(value=False)
+        skip_var = tk.BooleanVar(value=False)
+        move_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opts, text="递归子文件夹(默认关)", variable=recursive_var).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(opts, text="跳过已导入MD5(默认关)", variable=skip_var).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(opts, text="剪切源文件(默认)", variable=move_var).pack(side=tk.LEFT)
+
+        # ── 模特（必选，与单文件保存一致：文件入库到 模特文件夹/序号子文件夹） ──
+        mrow = ttk.Frame(win)
+        mrow.pack(fill=tk.X, padx=12, pady=4)
+        ttk.Label(mrow, text="模特(必选):").pack(side=tk.LEFT)
+        models = self.db.get_active_models()
+        model_map = {}
+        for m in models:
+            nm = m.get('name') or str(m.get('id'))
+            if nm not in model_map:
+                model_map[nm] = m['id']
+        model_var = tk.StringVar()
+        model_cb = ttk.Combobox(mrow, textvariable=model_var, state='readonly', width=26)
+        model_cb['values'] = ["（请选择模特）"] + sorted(model_map.keys())
+        model_cb.current(0)
+        model_cb.pack(side=tk.LEFT, padx=6)
+
+        # ── 标签选择（滚动区） ──
+        ttk.Label(win, text="应用到所有文件的标签:").pack(anchor='w', padx=12, pady=(8, 2))
+        tag_frame = ttk.Frame(win)
+        tag_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+        canvas = tk.Canvas(tag_frame, highlightthickness=0)
+        vsb = ttk.Scrollbar(tag_frame, orient='vertical', command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _on_wheel(event):
+            canvas.yview_scroll(int(-event.delta / 120), 'units')
+        canvas.bind('<MouseWheel>', _on_wheel)
+        inner.bind('<MouseWheel>', _on_wheel)
+
+        tag_vars = {}
+        tags = self.db.get_tags_with_category_name(only_active=True)
+        grouped = OrderedDict()
+        for t in tags:
+            grouped.setdefault(t.get('category_name') or '未分类', []).append(t)
+        for cat, items in grouped.items():
+            ttk.Label(inner, text=cat).pack(anchor='w', padx=4, pady=(8, 2))
+            for t in items:
+                v = tk.BooleanVar(value=False)
+                tag_vars[t['id']] = v
+                ttk.Checkbutton(inner, text=f"{t['name']} ({t.get('file_count', 0)})", variable=v).pack(anchor='w', padx=18)
+
+        # ── 进度 ──
+        status_var = tk.StringVar(value="准备就绪")
+        ttk.Label(win, textvariable=status_var).pack(anchor='w', padx=12)
+        progress = ttk.Progressbar(win, maximum=100)
+        progress.pack(fill=tk.X, padx=12, pady=(4, 10))
+
+        # ── 按钮 ──
+        btns = ttk.Frame(win)
+        btns.pack(fill=tk.X, padx=12, pady=(0, 12))
+        start_btn = ttk.Button(btns, text="开始导入")
+        start_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Button(btns, text="关闭", command=win.destroy).pack(side=tk.RIGHT, padx=5)
+
+        state = {'stop': False}
+
+        def on_start():
+            folder = folder_var.get().strip().strip('"')
+            if not folder or not os.path.isdir(folder):
+                messagebox.showwarning("提示", "请选择有效的源文件夹", parent=win)
+                return
+            model_id = model_map.get(model_var.get())
+            if not model_id:
+                messagebox.showwarning("提示", "请选择一个模特（与单文件保存一致，文件将入库到该模特的文件夹）", parent=win)
+                return
+            selected_tag_ids = [tid for tid, v in tag_vars.items() if v.get()]
+            if not selected_tag_ids:
+                if not messagebox.askyesno("确认", "未选择任何标签，仍要导入吗？", parent=win):
+                    return
+            start_btn.config(state='disabled')
+            state['stop'] = False
+            progress['value'] = 0
+            threading.Thread(
+                target=self._batch_import_worker,
+                args=(folder, recursive_var.get(), skip_var.get(), move_var.get(), model_id, selected_tag_ids, win, status_var, progress, start_btn, state),
+                daemon=True,
+            ).start()
+
+        start_btn.config(command=on_start)
+
+    def _resolve_good_subfolder(self, model_id, ext_l):
+        """与单文件保存一致的目录规则：data/good/<模特ID>/<3位序号>/。
+
+        图片：每个子文件夹最多 1000 个文件（计数含图片与视频，与图片保存流程一致）；
+        视频/音频：每个子文件夹最多 500 个（与视频保存流程一致）。
+        满额自动滚动到下一个序号文件夹，未满则继续使用最后一个。
+        """
+        base_folder = os.path.join(get_data_root(), 'good', str(model_id))
+        os.makedirs(base_folder, exist_ok=True)
+        if ext_l in self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS:
+            limit = 500
+            def count_in(folder):
+                return sum(1 for f in os.listdir(folder)
+                           if os.path.isfile(os.path.join(folder, f))
+                           and os.path.splitext(f)[1].lower() in (self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS))
+        else:
+            limit = 1000
+            def count_in(folder):
+                return sum(1 for f in os.listdir(folder)
+                           if os.path.isfile(os.path.join(folder, f))
+                           and os.path.splitext(f)[1].lower() in (self.IMAGE_EXTENSIONS | self.VIDEO_EXTENSIONS))
+        subs = []
+        try:
+            subs = [n for n in os.listdir(base_folder) if os.path.isdir(os.path.join(base_folder, n)) and n.isdigit()]
+        except Exception:
+            subs = []
+        if not subs:
+            sub_name = "001"
+        else:
+            last = sorted(subs)[-1]
+            last_folder = os.path.join(base_folder, last)
+            try:
+                cnt = count_in(last_folder)
+            except Exception:
+                cnt = 0
+            if cnt >= limit:
+                sub_name = f"{int(last) + 1:03d}"
+            else:
+                sub_name = last
+        target_folder = os.path.join(base_folder, sub_name)
+        os.makedirs(target_folder, exist_ok=True)
+        return target_folder
+
+    def _batch_import_worker(self, folder, recursive, skip_dupes, move_src, model_id, tag_ids, win, status_var, progress, start_btn, state):
+        """后台线程：批量导入整个文件夹（不触碰 Tk，只通过 root.after 更新 UI）"""
+        exts = self.IMAGE_EXTENSIONS | self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS
+        files = []
+        try:
+            if recursive:
+                for root_dir, dirs, names in os.walk(folder):
+                    dirs.sort()
+                    for n in sorted(names):
+                        p = os.path.join(root_dir, n)
+                        if os.path.splitext(p)[1].lower() in exts:
+                            files.append(p)
+            else:
+                for n in sorted(os.listdir(folder)):
+                    p = os.path.join(folder, n)
+                    if os.path.isfile(p) and os.path.splitext(p)[1].lower() in exts:
+                        files.append(p)
+        except Exception as e:
+            self.root.after(0, lambda: (status_var.set(f"扫描失败: {e}"), start_btn.config(state='normal')))
+            return
+
+        total = len(files)
+        if total == 0:
+            self.root.after(0, lambda: (status_var.set("没有找到图片/视频/音频文件"), start_btn.config(state='normal'),
+                                        messagebox.showinfo("批量导入", "该文件夹中没有可导入的媒体文件", parent=win)))
+            return
+
+        imported = skipped = errors = 0
+        last_err = None
+
+        def tick(i):
+            self.root.after(0, lambda i=i: self._batch_import_progress(status_var, progress, i, total, imported, skipped, errors))
+
+        for i, src in enumerate(files, 1):
+            if state['stop']:
+                break
+            try:
+                md5 = compute_md5(src)
+                if skip_dupes and md5:
+                    if self.db.get_file_by_md5(md5):
+                        skipped += 1
+                        if i % 5 == 0 or i == total:
+                            tick(i)
+                        continue
+                _, ext = os.path.splitext(src)
+                ext_l = ext.lower()
+                file_size = os.path.getsize(src) if os.path.exists(src) else None
+                file_id = self.db.add_file(src, file_name=os.path.basename(src), file_size=file_size, md5_value=md5)
+                if not file_id:
+                    errors += 1
+                    last_err = f"入库失败: {os.path.basename(src)}"
+                    tick(i)
+                    continue
+                # 与单文件保存一致：入库到 data/good/<模特ID>/<001|002|…>/<id><ext>
+                target_folder = self._resolve_good_subfolder(model_id, ext_l)
+                new_name = f"{file_id}{ext_l}"
+                new_path = os.path.join(target_folder, new_name)
+                if os.path.exists(new_path):
+                    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    new_name = f"{file_id}_{ts}{ext_l}"
+                    new_path = os.path.join(target_folder, new_name)
+                if move_src:
+                    shutil.move(src, new_path)
+                else:
+                    shutil.copy2(src, new_path)
+                self.db.update_file(file_id, file_path=new_path, file_name=new_name, file_size=os.path.getsize(new_path))
+                if ext_l in self.IMAGE_EXTENSIONS:
+                    self.db.save_image_data(file_id, new_path, md5_value=md5)
+                elif ext_l in self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS:
+                    self.db.save_video_data(file_id, new_path)
+                    if ext_l in self.VIDEO_EXTENSIONS:
+                        thumb = os.path.join(target_folder, f"{file_id}_thumb.jpg")
+                        if self._extract_first_frame_thumb(new_path, thumb):
+                            self.db.update_file_thumbnail(file_id, thumb)
+                self.db.set_file_models(file_id, [model_id])
+                if tag_ids:
+                    self.db.set_file_tags(file_id, tag_ids)
+                imported += 1
+            except Exception as e:
+                errors += 1
+                last_err = f"{os.path.basename(src)}: {e}"
+            if i % 3 == 0 or i == total:
+                tick(i)
+
+        def finish():
+            progress['value'] = 100
+            status_var.set(f"完成：导入 {imported}，跳过 {skipped}，失败 {errors}")
+            start_btn.config(state='normal')
+            messagebox.showinfo(
+                "批量导入完成",
+                f"导入 {imported} 个\n跳过(已存在) {skipped} 个\n失败 {errors} 个" + (f"\n\n最后错误：{last_err}" if last_err else ""),
+                parent=win,
+            )
+        self.root.after(0, finish)
+
+    def _batch_import_progress(self, status_var, progress, i, total, imported, skipped, errors):
+        status_var.set(f"({i}/{total}) 已导入 {imported} · 跳过 {skipped} · 失败 {errors}")
+        progress['value'] = (i / total * 100) if total else 0
+
+    def _extract_first_frame_thumb(self, video_path, out_path):
+        """批量导入：提取视频首帧作为缩略图"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap or not cap.isOpened():
+                if cap:
+                    cap.release()
+                return None
+            ok, frame = cap.read()
+            cap.release()
+            if not ok or frame is None:
+                return None
+            h, w = frame.shape[:2]
+            max_w = 1280
+            if max(w, h) > max_w:
+                scale = max_w / max(w, h)
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            ok2, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if not ok2:
+                return None
+            with open(out_path, 'wb') as f:
+                f.write(buf.tobytes())
+            return out_path
+        except Exception:
+            return None
+
     def refresh_and_load_next(self):
         """刷新待处理列表并自动加载下一张图片"""
         # 保存当前索引
@@ -945,6 +1234,7 @@ class ImageClassifierApp:
     def load_image(self, image_path):
         """加载并显示预览"""
         self.current_image_path = image_path
+        display_ready = False
 
         try:
             if self.is_video_path(image_path):
@@ -992,7 +1282,9 @@ class ImageClassifierApp:
                 y = canvas_height // 2
                 self.image_canvas.create_image(x, y, image=photo, anchor=tk.CENTER)
                 self.image_canvas.image = photo
-            
+            # 走到这里说明预览/占位已成功渲染;之后的异常不属于“损坏图片”,不应触发自动跳过
+            display_ready = True
+
             # 获取文件记录（不自动创建）
             file_record = self.db.get_file(image_path)
             if file_record:
@@ -1022,7 +1314,31 @@ class ImageClassifierApp:
             self.root.after(100, self._try_auto_save)
 
         except Exception as e:
-            messagebox.showerror("错误", f"加载预览失败: {str(e)}")
+            if not display_ready:
+                # 损坏/缺失/无法解码的图片不再弹窗卡住流程,自动跳到下一张;
+                # 自动保存/自动下一张场景下不会因为一张坏图中断整个批处理。
+                self._skip_corrupt_image(image_path)
+            else:
+                messagebox.showerror("错误", f"处理预览失败: {str(e)}")
+
+    def _skip_corrupt_image(self, image_path=None):
+        """跳过无法加载的图片文件,自动加载下一张(避免损坏图片卡住自动处理)。"""
+        try:
+            base_name = os.path.basename(image_path or self.current_image_path or '')
+        except Exception:
+            base_name = ''
+        next_index = self.current_image_index + 1
+        total = len(self.image_files)
+        if next_index < total:
+            self.root.after(10, lambda idx=next_index: self.load_image_by_index(idx))
+            if base_name:
+                self.status_label.config(text=f"已跳过无法加载的文件: {base_name} ({next_index + 1}/{total})")
+        else:
+            if base_name:
+                self.status_label.config(text=f"已跳过无法加载的文件: {base_name},已是最后一张")
+            if self.auto_save_enabled.get():
+                self._set_auto_save_enabled(False)
+                self.status_label.config(text="剩余图片均无法加载,已自动关闭自动保存")
 
     def get_preview_image(self, path):
         ext = os.path.splitext(path)[1].lower()
@@ -2611,34 +2927,34 @@ class ImageClassifierApp:
             self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
     
     def save_image(self, silent=False):
-        """保存当前图片到数据库"""
+        """保存当前图片到数据库,成功返回 True,失败返回 False"""
         if self._saving:
             # 重入保护：自动保存的 after 回调与用户双击保存按钮可能并发触发
             if not silent:
                 messagebox.showinfo("提示", "正在保存中，请稍候")
-            return
+            return False
         if not self.current_image_path:
             if not silent:
                 messagebox.showwarning("警告", "请先选择一张图片")
-            return
+            return False
 
         if not os.path.exists(self.current_image_path):
             if not silent:
                 messagebox.showerror("错误", "图片文件不存在")
-            return
+            return False
 
         # 检查是否选择了标签和模特
         if not hasattr(self, 'model_var') or not hasattr(self, 'tag_vars'):
             if not silent:
                 messagebox.showwarning("警告", "请先选择标签和模特")
-            return
+            return False
 
         # 获取选中的模特（单选）
         selected_model_id = self.model_var.get()
         if not selected_model_id:
             if not silent:
                 messagebox.showwarning("警告", "请选择一个模特")
-            return
+            return False
         selected_model_ids = [selected_model_id]  # 转换为列表以兼容后续代码
         
         # 获取选中的标签（可选）
@@ -2734,11 +3050,13 @@ class ImageClassifierApp:
             # 保存成功后，根据"自动下一张"开关决定是否加载下一张
             if self.auto_next.get():
                 self.refresh_and_load_next()
+            return True
 
         except Exception as e:
             if not silent:
                 messagebox.showerror("错误", f"保存图片失败:\n{str(e)}")
             self.status_label.config(text="保存图片失败")
+            return False
         finally:
             self._saving = False
 
@@ -2772,6 +3090,8 @@ class ImageClassifierApp:
         """加载图片后尝试自动保存（如果开关开启且条件满足）"""
         if not self.auto_save_enabled.get():
             return
+        if self._saving:
+            return
         model_id = self.model_var.get()
         if not model_id:
             return
@@ -2783,7 +3103,11 @@ class ImageClassifierApp:
         if self.current_dialog is not None:
             return
         self.status_label.config(text="自动保存中...")
-        self.save_image(silent=True)
+        ok = self.save_image(silent=True)
+        if not ok and self.auto_save_enabled.get():
+            # 自动保存失败(常见于图片损坏/解码失败):不弹窗卡住批处理,跳过当前文件
+            self.status_label.config(text="自动保存失败,已跳过当前文件")
+            self._skip_corrupt_image(self.current_image_path)
 
     def add_to_blacklist(self):
         """将当前图片加入黑名单（移动到data/bad文件夹，不写入数据库）"""

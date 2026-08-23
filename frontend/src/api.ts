@@ -10,22 +10,27 @@ const q = (params: Record<string, string | number | boolean | undefined>) => {
   return sp.toString()
 }
 
-async function get<T>(url: string, init?: RequestInit, timeoutMs = 15000): Promise<T> {
+/** 带超时 + 外部 AbortSignal 联动的 fetch：任何调用方无需再重复实现取消逻辑 */
+async function fetchWithTimeout<T>(url: string, init: RequestInit = {}, timeoutMs = 15000, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
-  const onAbort = () => controller.abort()
+  const onExternalAbort = () => controller.abort()
   try {
-    if (init?.signal) {
-      if (init.signal.aborted) controller.abort()
-      else init.signal.addEventListener('abort', onAbort, { once: true })
+    if (signal) {
+      if (signal.aborted) controller.abort()
+      else signal.addEventListener('abort', onExternalAbort, { once: true })
     }
     const r = await fetch(url, { ...init, signal: controller.signal })
     if (!r.ok) throw new Error(String(r.status))
     return r.json()
   } finally {
     clearTimeout(timer)
-    if (init?.signal) init.signal.removeEventListener('abort', onAbort)
+    if (signal) signal.removeEventListener('abort', onExternalAbort)
   }
+}
+
+async function get<T>(url: string, init?: RequestInit, timeoutMs = 15000): Promise<T> {
+  return fetchWithTimeout<T>(url, init, timeoutMs)
 }
 
 async function getWithFallback<T>(path: string): Promise<T> {
@@ -63,6 +68,12 @@ export async function fetchTags(): Promise<Tag[]> {
   }
 }
 
+export async function recalcTagCounts(): Promise<{ ok: boolean }> {
+  const r = await fetch(`${API_BASE}/tags/recalc`, { method: 'POST' })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
 export type MediaQuery = {
   model_ids?: string[]
   tag_ids?: string[]
@@ -77,6 +88,8 @@ export type MediaQuery = {
   name?: string
   edit_mode?: boolean
   true_random?: boolean
+  /** keyset 游标（"v1|v2|v3"，与 ORDER BY 列对应），提供时服务端忽略 page/offset */
+  cursor?: string
 }
 
 export type TrueRandomCacheMeta = {
@@ -146,24 +159,11 @@ export async function fetchMedia(params: MediaQuery, signal?: AbortSignal): Prom
     name: (params.name ?? '').trim() || undefined,
     edit_mode: params.edit_mode,
     true_random: params.true_random,
+    cursor: params.cursor,
   })
   const base = API_BASE
   const url = `${base}/media?${s}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15000)
-  const onExternalAbort = () => controller.abort()
-  try {
-    if (signal) {
-      if (signal.aborted) controller.abort()
-      else signal.addEventListener('abort', onExternalAbort, { once: true })
-    }
-    const r = await fetch(url, { signal: controller.signal })
-    if (!r.ok) throw new Error(String(r.status))
-    return r.json()
-  } finally {
-    clearTimeout(timer)
-    if (signal) signal.removeEventListener('abort', onExternalAbort)
-  }
+  return await fetchWithTimeout<MediaResponse>(url, {}, 15000, signal)
 }
 
 export async function likeMedia(fileId: string): Promise<{ ok: boolean; heat_value: number }> {
@@ -234,7 +234,6 @@ export async function openInSystem(filePath: string): Promise<boolean> {
 }
 
 export async function validatePassword(code: string): Promise<{ ok: boolean }> {
-  const base = API_BASE
   const s = q({ code })
   return await getRetry<{ ok: boolean }>(`/password/validate?${s}`)
 }

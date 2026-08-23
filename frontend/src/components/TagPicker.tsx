@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchTags } from '../api'
 import type { Tag } from '../types'
 
@@ -13,11 +13,23 @@ export default function TagPicker({ open, onClose, onApply, title }: Props) {
   const [tags, setTags] = useState<Tag[]>([])
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const searchRef = useRef<HTMLInputElement | null>(null)
+  const lastFocusedRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!open) return
     fetchTags().then(setTags).catch(() => setTags([]))
     setSelected(new Set())
     setSearch('')
+  }, [open])
+  // 打开时聚焦搜索框，关闭时归还焦点
+  useEffect(() => {
+    if (!open) return
+    lastFocusedRef.current = document.activeElement as HTMLElement | null
+    const raf = requestAnimationFrame(() => searchRef.current?.focus())
+    return () => {
+      cancelAnimationFrame(raf)
+      lastFocusedRef.current?.focus?.()
+    }
   }, [open])
   useEffect(() => {
     if (!open) return
@@ -40,7 +52,13 @@ export default function TagPicker({ open, onClose, onApply, title }: Props) {
   if (!open) return null
   return (
     <div className="lightbox-backdrop" onClick={onClose}>
-      <div className="lightbox-body anim-in dialog-panel tag-picker-panel" onClick={e => e.stopPropagation()}>
+      <div
+        className="lightbox-body anim-in dialog-panel tag-picker-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title || '选择标签'}
+        onClick={e => e.stopPropagation()}
+      >
         <div className="dialog-header tag-picker-header">
           <div className="dialog-title">{title || '选择标签'}</div>
           <div className="dialog-actions">
@@ -48,7 +66,14 @@ export default function TagPicker({ open, onClose, onApply, title }: Props) {
             <button className="tool-btn" onClick={onClose}>关闭</button>
           </div>
         </div>
-        <input className="search-input" placeholder="搜索标签" value={search} onChange={e => setSearch(e.target.value)} />
+        <input
+          ref={searchRef}
+          className="search-input"
+          placeholder="搜索标签"
+          aria-label="搜索标签"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
         <div className="tag-picker-body">
           {Object.entries(groups).map(([k, list]) => (
             <div key={k}>
@@ -67,7 +92,6 @@ export default function TagPicker({ open, onClose, onApply, title }: Props) {
                       type="button"
                       className={`tag-chip${isSel ? ' selected' : ''}`}
                       onClick={toggle}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() } }}
                       aria-pressed={isSel}
                     >
                       <span>{t.name}</span>

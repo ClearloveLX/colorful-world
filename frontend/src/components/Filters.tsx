@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fetchModels, fetchTags } from '../api'
+import { fetchModels, fetchTags, recalcTagCounts } from '../api'
 import type { Model, Tag } from '../types'
+import WhaleMark from './WhaleMark'
 import { toggleGroupOpen } from '../utils/toggleGroupOpen'
 import { CARD_WIDTH_MAX, CARD_WIDTH_MIN, CARD_WIDTH_STEP } from '../utils/cardWidth'
 
@@ -134,15 +135,15 @@ export default function Filters({
     if (!q) return entries
     return entries.map(([g, list]) => [g, list.filter(t => `${t.name}${t.category_name ?? ''}`.toLowerCase().includes(q))] as [string, Tag[]])
   }, [tagGroups, tagSearch])
-  const onToggleKey = (e: React.KeyboardEvent, fn: () => void) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      fn()
-    }
-  }
-  const refreshTags = () => {
+  const refreshTags = async () => {
     setRefreshingTags(true)
-    fetchTags().then(setTags).finally(() => setRefreshingTags(false))
+    try {
+      // 先全量重算计数(纠正增量维护漂移),再拉取最新列表
+      await recalcTagCounts().catch(() => undefined)
+      setTags(await fetchTags())
+    } finally {
+      setRefreshingTags(false)
+    }
   }
   const refreshModels = () => {
     setRefreshingModels(true)
@@ -151,7 +152,11 @@ export default function Filters({
   return (
     <div className="sidebar">
       <div className="sidebar-curation-head">
-        <div className="sidebar-title">筛选</div>
+        <WhaleMark className="sidebar-brand-mark" />
+        <div className="sidebar-brand-copy">
+          <span className="sidebar-brand-eyebrow">COLORFULWORLD</span>
+          <div className="sidebar-title">媒体图库</div>
+        </div>
       </div>
       {(() => {
         const modelMeta = new Map(models.map(m => [m.id, m]))
@@ -160,20 +165,18 @@ export default function Filters({
         if (total === 0) return null
         return (
           <section className="filter-section-card filter-section-card-emphasis" style={{ marginBottom: 12 }}>
-            <div
+            <button
+              type="button"
               className="section-header"
-              role="button"
-              tabIndex={0}
               aria-expanded={sectionOpen.selected}
               onClick={() => setSectionOpen(s => ({ ...s, selected: !s.selected }))}
-              onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, selected: !s.selected })))}
             >
               <span className="section-name">已选</span>
-              <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span className="section-header-side">
                 <span className={`caret${sectionOpen.selected ? ' open' : ''}`} />
                 <span className="badge-count">{total}</span>
               </span>
-            </div>
+            </button>
             {sectionOpen.selected && (
               <div style={{ display:'grid', gap:8, marginTop:8 }}>
                 {selectedModels.length > 0 && (
@@ -256,17 +259,15 @@ export default function Filters({
         )
       })()}
       <section className="filter-section-card filter-section-card-emphasis" style={{ marginBottom: 12 }}>
-        <div
+        <button
+          type="button"
           className="section-header"
-          role="button"
-          tabIndex={0}
           aria-expanded={sectionOpen.filter}
           onClick={() => setSectionOpen(s => ({ ...s, filter: !s.filter }))}
-          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, filter: !s.filter })))}
         >
           <span className="section-name">筛选</span>
           <span className={`caret${sectionOpen.filter ? ' open' : ''}`} />
-        </div>
+        </button>
         {sectionOpen.filter && (
           <div className="filter-section-body" style={{ margin: '12px 0' }}>
             <label className="chip" style={{ display: 'inline-flex', marginBottom: 8 }}>
@@ -312,17 +313,15 @@ export default function Filters({
         )}
       </section>
       <section className="filter-section-card filter-section-card-emphasis" style={{ marginBottom: 12 }}>
-        <div
+        <button
+          type="button"
           className="section-header"
-          role="button"
-          tabIndex={0}
           aria-expanded={sectionOpen.order}
           onClick={() => setSectionOpen(s => ({ ...s, order: !s.order }))}
-          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, order: !s.order })))}
         >
           <span className="section-name">排序</span>
           <span className={`caret${sectionOpen.order ? ' open' : ''}`} />
-        </div>
+        </button>
         {sectionOpen.order && (
           <div className="sort-segmented" style={{ marginTop: 8 }}>
             <button
@@ -364,30 +363,30 @@ export default function Filters({
         )}
       </section>
       <section className="filter-section-card" style={{ marginBottom: 12 }}>
-        <div
-          className="section-header"
-          role="button"
-          tabIndex={0}
-          aria-expanded={sectionOpen.models}
-          onClick={() => setSectionOpen(s => ({ ...s, models: !s.models }))}
-          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, models: !s.models })))}
-        >
-          <span className="section-name">模特</span>
-          <span style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <button
-              className={`refresh-btn${refreshingModels ? ' spinning' : ''}`}
-              title="刷新模特计数"
-              aria-label="刷新模特"
-              onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshModels(); }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <polyline points="21 3 21 9 15 9" />
-              </svg>
-            </button>
-            <span className={`caret${sectionOpen.models ? ' open' : ''}`} />
-            <span className="badge-count">{models.length}</span>
-          </span>
+        <div className="section-header-row">
+          <button
+            type="button"
+            className="section-header"
+            aria-expanded={sectionOpen.models}
+            onClick={() => setSectionOpen(s => ({ ...s, models: !s.models }))}
+          >
+            <span className="section-name">模特</span>
+            <span className="section-header-side">
+              <span className={`caret${sectionOpen.models ? ' open' : ''}`} />
+              <span className="badge-count">{models.length}</span>
+            </span>
+          </button>
+          <button
+            className={`refresh-btn${refreshingModels ? ' spinning' : ''}`}
+            title="刷新模特计数"
+            aria-label="刷新模特"
+            onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshModels(); }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <polyline points="21 3 21 9 15 9" />
+            </svg>
+          </button>
         </div>
         {sectionOpen.models && (
           <>
@@ -395,19 +394,18 @@ export default function Filters({
             <div style={{ display: 'grid', gap: 8 }}>
               {filteredModelsByGroup.map(([group, list]) => (
                 <div key={`model-group-${group}`}>
-                  <div
+                  <button
+                    type="button"
                     className="group-header"
-                    role="button"
-                    tabIndex={0}
                     onClick={() => setModelOpenGroups(s => ({ ...s, [group]: toggleGroupOpen(s[group]) }))}
-                    onKeyDown={(e) => onToggleKey(e, () => setModelOpenGroups(s => ({ ...s, [group]: toggleGroupOpen(s[group]) })))}
+                    aria-expanded={modelOpenGroups[group] !== false}
                   >
                     <span className="group-name">{group}</span>
-                    <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <span className="section-header-side">
                       <span className={`caret${(modelOpenGroups[group] !== false) ? ' open' : ''}`} />
                       <span className="badge-count">{list.length}</span>
                     </span>
-                  </div>
+                  </button>
                   {modelOpenGroups[group] !== false && (
                     <div className="chips" style={{ marginTop: 6 }}>
                       {list.map(m => (
@@ -434,30 +432,30 @@ export default function Filters({
         )}
       </section>
       <section className="filter-section-card" style={{ marginBottom: 12 }}>
-        <div
-          className="section-header"
-          role="button"
-          tabIndex={0}
-          aria-expanded={sectionOpen.tags}
-          onClick={() => setSectionOpen(s => ({ ...s, tags: !s.tags }))}
-          onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, tags: !s.tags })))}
-        >
-          <span className="section-name">标签</span>
-          <span style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <button
-              className={`refresh-btn${refreshingTags ? ' spinning' : ''}`}
-              title="刷新标签计数"
-              aria-label="刷新标签"
-              onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshTags(); }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                <polyline points="21 3 21 9 15 9" />
-              </svg>
-            </button>
-            <span className={`caret${sectionOpen.tags ? ' open' : ''}`} />
-            <span className="badge-count">{tags.length}</span>
-          </span>
+        <div className="section-header-row">
+          <button
+            type="button"
+            className="section-header"
+            aria-expanded={sectionOpen.tags}
+            onClick={() => setSectionOpen(s => ({ ...s, tags: !s.tags }))}
+          >
+            <span className="section-name">标签</span>
+            <span className="section-header-side">
+              <span className={`caret${sectionOpen.tags ? ' open' : ''}`} />
+              <span className="badge-count">{tags.length}</span>
+            </span>
+          </button>
+          <button
+            className={`refresh-btn${refreshingTags ? ' spinning' : ''}`}
+            title="刷新标签计数"
+            aria-label="刷新标签"
+            onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshTags(); }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <polyline points="21 3 21 9 15 9" />
+            </svg>
+          </button>
         </div>
         {sectionOpen.tags && (
           <>
@@ -468,19 +466,18 @@ export default function Filters({
             <div style={{ display: 'grid', gap: 8 }}>
               {filteredTagsByGroup.map(([group, list]) => (
                 <div key={group}>
-                  <div
+                  <button
+                    type="button"
                     className="group-header"
-                    role="button"
-                    tabIndex={0}
                     onClick={() => setTagOpenGroups(s => ({ ...s, [group]: toggleGroupOpen(s[group]) }))}
-                    onKeyDown={(e) => onToggleKey(e, () => setTagOpenGroups(s => ({ ...s, [group]: toggleGroupOpen(s[group]) })))}
+                    aria-expanded={tagOpenGroups[group] !== false}
                   >
                     <span className="group-name">{group}</span>
-                    <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <span className="section-header-side">
                       <span className={`caret${(tagOpenGroups[group] !== false) ? ' open' : ''}`} />
                       <span className="badge-count">{list.length}</span>
                     </span>
-                  </div>
+                  </button>
                   {tagOpenGroups[group] !== false && (
                     <div className="chips" style={{ marginTop: 6 }}>
                       {list.map(t => (
@@ -509,20 +506,18 @@ export default function Filters({
 
       {editMode && (
         <section className="filter-section-card" style={{ marginBottom: 12 }}>
-          <div
+          <button
+            type="button"
             className="section-header"
-            role="button"
-            tabIndex={0}
             aria-expanded={sectionOpen.system}
             onClick={() => setSectionOpen(s => ({ ...s, system: !s.system }))}
-            onKeyDown={(e) => onToggleKey(e, () => setSectionOpen(s => ({ ...s, system: !s.system })))}
           >
             <span className="section-name">系统设置</span>
-            <span style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span className="section-header-side">
               <span className={`caret${sectionOpen.system ? ' open' : ''}`} />
               <span className="badge-count">{trueRandomCacheCount}</span>
             </span>
-          </div>
+          </button>
           {sectionOpen.system && (
             <div className="system-settings-panel">
               <div className="system-setting-row">

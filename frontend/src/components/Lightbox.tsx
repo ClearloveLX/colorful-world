@@ -19,23 +19,53 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
   const [closing, setClosing] = useState(false)
   const [flipDir, setFlipDir] = useState<'in' | 'out' | null>(null)
   const prevFlipKey = useRef(flipKey)
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null)
+  const lastFocusedRef = useRef<HTMLElement | null>(null)
+  const closeTimerRef = useRef<number | null>(null)
+  const flipTimerRef = useRef<number | null>(null)
+
+  // 重新打开时清除上一次的关闭动画状态，避免以 closing 类渲染成不可见
+  useEffect(() => {
+    if (open) setClosing(false)
+  }, [open])
 
   useEffect(() => {
     if (flipKey !== undefined && flipKey !== null && prevFlipKey.current !== undefined && prevFlipKey.current !== null && flipKey !== prevFlipKey.current) {
       setFlipDir('out')
-      const timer = setTimeout(() => setFlipDir('in'), 250)
-      return () => clearTimeout(timer)
+      if (flipTimerRef.current) window.clearTimeout(flipTimerRef.current)
+      flipTimerRef.current = window.setTimeout(() => {
+        flipTimerRef.current = null
+        setFlipDir('in')
+      }, 250)
     }
     prevFlipKey.current = flipKey
   }, [flipKey])
 
+  useEffect(() => () => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current)
+    if (flipTimerRef.current) window.clearTimeout(flipTimerRef.current)
+  }, [])
+
   const handleClose = useCallback(() => {
     setClosing(true)
-    setTimeout(() => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null
       setClosing(false)
       onClose()
     }, 310)
   }, [onClose])
+
+  // 打开时把焦点移入弹窗，关闭时归还给触发元素
+  useEffect(() => {
+    if (!open) return
+    lastFocusedRef.current = document.activeElement as HTMLElement | null
+    const raf = requestAnimationFrame(() => closeBtnRef.current?.focus())
+    return () => {
+      cancelAnimationFrame(raf)
+      lastFocusedRef.current?.focus?.()
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -59,6 +89,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
   return createPortal(
     <div className={`lightbox-backdrop${closing ? ' closing' : ''}`} onClick={handleClose} role="dialog" aria-modal="true" aria-label="媒体预览">
       <button
+        ref={closeBtnRef}
         className={`lightbox-close`}
         onClick={e => { e.stopPropagation(); handleClose() }}
         aria-label="关闭预览"
@@ -70,6 +101,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
         className={`lightbox-nav prev${canPrev ? '' : ' disabled'}`}
         onClick={e => { e.stopPropagation(); if (canPrev && onPrev) onPrev() }}
         aria-label="上一项"
+        aria-disabled={!canPrev}
       >◀</button>
       <div className="lightbox-body anim-in" onClick={e => { if (e.target === e.currentTarget) handleClose(); e.stopPropagation() }}>
         {leftAside}
@@ -81,6 +113,7 @@ export default function Lightbox({ open, onClose, onPrev, onNext, canPrev = true
         className={`lightbox-nav next${canNext ? '' : ' disabled'}`}
         onClick={e => { e.stopPropagation(); if (canNext && onNext) onNext() }}
         aria-label="下一项"
+        aria-disabled={!canNext}
       >▶</button>
     </div>,
     document.body

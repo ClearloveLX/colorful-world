@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { validatePassword, fetchCurrentPassword, fetchTrueRandomCacheSettings, updateTrueRandomCacheSettings, clearTrueRandomCache } from './api'
 import Filters from './components/Filters'
 import MediaGrid from './components/MediaGrid'
+import ParticleWhale from './components/ParticleWhale'
+import DigitileWhale from './components/DigitileWhale'
+import WhaleMark from './components/WhaleMark'
 import { loadCardWidth, saveCardWidth } from './utils/cardWidth'
 
 export default function App() {
@@ -35,24 +38,24 @@ export default function App() {
   const [pageProgress, setPageProgress] = useState({ width: 0, done: false })
   const idleTimerRef = useRef<number | null>(null)
   const settingsHintTimerRef = useRef<number | null>(null)
-  const loadTrueRandomSettings = async () => {
+  const loadTrueRandomSettings = useCallback(async () => {
     try {
       const r = await fetchTrueRandomCacheSettings()
       setTrueRandomCacheEnabled(r.enabled)
       setTrueRandomCacheCount(r.cached_count)
     } catch {}
-  }
-  const handleCardWidthChange = (w: number) => {
+  }, [])
+  const handleCardWidthChange = useCallback((w: number) => {
     setCardWidth(w)
-  }
-  const handleCardWidthSave = (w: number) => {
+  }, [])
+  const handleCardWidthSave = useCallback((w: number) => {
     saveCardWidth(w, window.localStorage)
-  }
-  const flashSettingsHint = (text: string) => {
+  }, [])
+  const flashSettingsHint = useCallback((text: string) => {
     setSettingsHint(text)
     if (settingsHintTimerRef.current) window.clearTimeout(settingsHintTimerRef.current)
     settingsHintTimerRef.current = window.setTimeout(() => setSettingsHint(''), 1800)
-  }
+  }, [])
   useEffect(() => {
     const onScroll = () => {
       setShowTop(window.scrollY > 600)
@@ -148,13 +151,24 @@ export default function App() {
       setSettingsBusy(false)
     }
   }
-  const handleLocateRequest = (fileId: string) => {
+  const handleLocateRequest = useCallback((fileId: string) => {
     setOrder('recent')
     setLocateRequest({ fileId })
-  }
-  const handleLocateRequestClear = () => {
+  }, [])
+  const handleLocateRequestClear = useCallback(() => {
     setLocateRequest(null)
-  }
+  }, [])
+  const onTagClick = useCallback((id: string) => {
+    setTagIds(prev => {
+      const s = new Set(prev)
+      s.add(id)
+      return Array.from(s)
+    })
+    setExcludeTagIds(prev => prev.filter(x => x !== id))
+  }, [])
+  const onModelClick = useCallback((id: string) => {
+    setModelIds([id])
+  }, [])
   const onSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     setError('')
@@ -170,7 +184,7 @@ export default function App() {
   }
   useEffect(() => {
     if (!locked) return
-    // 预取访问码写入 localStorage，锁屏时自动填入（必需功能，用户指定不可移除）
+    // 预取访问码写入 localStorage 供用户查看；输入框始终由用户手动输入，不自动填充（必需功能，用户指定不可移除）
     ;(async () => {
       try {
         const r = await fetchCurrentPassword()
@@ -199,12 +213,23 @@ export default function App() {
       {!locked && <div className={`page-progress${pageProgress.done ? ' done' : ''}`} style={{ width: `${pageProgress.width}%` }} />}
       {locked && (
         <div className="lock-overlay">
+          <ParticleWhale className="lock-whale" showWhale={false} opacity={0.9} />
+          <DigitileWhale className="lock-digitile" spin={false} loose={1} />
+          <div className="lock-scrim" />
           <form className="lock-card" onSubmit={onSubmit}>
-            <div className="lock-title">输入密码进入</div>
+            <div className="lock-brand">
+              <WhaleMark className="lock-brand-mark" />
+              <div className="lock-brand-copy">
+                <div className="lock-eyebrow">COLORFULWORLD</div>
+                <div className="lock-title">输入密码进入</div>
+              </div>
+            </div>
             <input
               className="lock-input"
               type="password"
               autoFocus
+              aria-label="访问密码"
+              autoComplete="off"
               value={code}
               onChange={e => setCode(e.target.value)}
               placeholder="请输入访问密码"
@@ -218,6 +243,7 @@ export default function App() {
       )}
       {!locked && (
         <>
+          <ParticleWhale className="app-ambient-bg" showWhale={false} density={0} opacity={0.5} />
           <aside className="app-sidebar-shell">
             <Filters
               selectedModels={modelIds}
@@ -270,19 +296,10 @@ export default function App() {
               seed={seed}
               cardWidthTarget={cardWidth}
               locateRequest={locateRequest}
-              onLocateRequest={(fileId) => handleLocateRequest(fileId)}
+              onLocateRequest={handleLocateRequest}
               onLocateRequestClear={handleLocateRequestClear}
-              onTagClick={(id) => {
-                setTagIds(prev => {
-                  const s = new Set(prev)
-                  s.add(id)
-                  return Array.from(s)
-                })
-                setExcludeTagIds(prev => prev.filter(x => x !== id))
-              }}
-              onModelClick={(id) => {
-                setModelIds([id])
-              }}
+              onTagClick={onTagClick}
+              onModelClick={onModelClick}
             />
           </main>
           <button

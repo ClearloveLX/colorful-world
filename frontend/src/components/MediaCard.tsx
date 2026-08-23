@@ -1,12 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '../types'
 import { likeMedia, dislikeMedia } from '../api'
+import { formatDurationZh, formatFileSize, isVideoFile } from '../utils/format'
 
-type Props = { item: MediaItem; onOpen: () => void; onOpenSystem?: () => void; onLocate?: () => void; highlighted?: boolean; onTagClick?: (id: string) => void; onModelClick?: (id: string) => void }
-type ExtraProps = { selectable?: boolean; selected?: boolean; onSelectToggle?: () => void; dragging?: boolean }
+type Props = {
+  item: MediaItem
+  index: number
+  onOpen: (index: number) => void
+  onOpenSystem?: (path: string) => void
+  onLocate?: (id: string) => void
+  highlighted?: boolean
+  onTagClick?: (id: string) => void
+  onModelClick?: (id: string) => void
+  selectable?: boolean
+  selected?: boolean
+  onSelectToggle?: (id: string) => void
+}
 
-export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highlighted, onTagClick, onModelClick, selectable, selected, onSelectToggle, dragging }: Props & ExtraProps) {
-  const isVideo = item.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(item.file_type.toLowerCase())
+function MediaCard({ item, index, onOpen, onOpenSystem, onLocate, highlighted, onTagClick, onModelClick, selectable, selected, onSelectToggle }: Props) {
+  const isVideo = isVideoFile(item.file_type)
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [ripple, setRipple] = useState<{x:number;y:number;key:number}|null>(null)
@@ -35,35 +47,15 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     if (w > 0 && h > 0) return `${w}/${h}`
     return undefined
   }, [item.image_width, item.image_height])
-  const fmtSize = (bytes?: number | null): string | null => {
-    if (!bytes || bytes <= 0) return null
-    const kb = bytes / 1024
-    const mb = kb / 1024
-    const gb = mb / 1024
-    if (gb >= 1) return `${gb.toFixed(2)}G`
-    if (mb >= 1) return `${mb.toFixed(2)}M`
-    const k = Number(kb.toFixed(2))
-    return `${(k <= 0 ? 0.01 : k).toFixed(2)}k`
-  }
-  const fmtDurZh = (ms?: number | null): string | null => {
-    if (!ms || ms <= 0) return null
-    const total = Math.round(ms / 1000)
-    const h = Math.floor(total / 3600)
-    const m = Math.floor((total % 3600) / 60)
-    const s = total % 60
-    const pad = (n: number) => String(n).padStart(2, '0')
-    if (h > 0) return `${h}时${pad(m)}分${pad(s)}秒`
-    return `${m}分${pad(s)}秒`
-  }
   const onClick = (e: React.MouseEvent) => {
     if (selectable) {
       e.preventDefault()
       e.stopPropagation()
-      onSelectToggle && onSelectToggle()
+      onSelectToggle && onSelectToggle(item.id)
       return
     }
     const el = cardRef.current
-    if (!el) { onOpen(); return }
+    if (!el) { onOpen(index); return }
     const r = el.getBoundingClientRect()
     const x = e.clientX - r.left
     const y = e.clientY - r.top
@@ -72,7 +64,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     setTimeout(() => setRipple(null), 600)
     if (clickTimerRef.current) { window.clearTimeout(clickTimerRef.current); clickTimerRef.current = null }
     clickTimerRef.current = window.setTimeout(() => {
-      onOpen()
+      onOpen(index)
       clickTimerRef.current = null
     }, 260)
   }
@@ -80,7 +72,15 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     e.preventDefault()
     e.stopPropagation()
     if (clickTimerRef.current) { window.clearTimeout(clickTimerRef.current); clickTimerRef.current = null }
-    onOpenSystem && onOpenSystem()
+    onOpenSystem && onOpenSystem(item.file_path || '')
+  }
+  /** 标题（键盘可达）与封面共用的激活行为 */
+  const activate = () => {
+    if (selectable) {
+      onSelectToggle && onSelectToggle(item.id)
+      return
+    }
+    onOpen(index)
   }
   useEffect(() => {
     const el = cardRef.current
@@ -151,6 +151,25 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
       mutationInFlightRef.current = false
     }
   }
+  const onDislike = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const now = Date.now()
+    if (busy || (now - lastClickDownRef.current) < 420) return
+    lastClickDownRef.current = now
+    mutationInFlightRef.current = true
+    setHeat(h => (Number.isFinite(h) ? h - 1 : -1))
+    setFlyDownKey(now)
+    setDisliking(true)
+    try {
+      const res = await dislikeMedia(item.id)
+      if (typeof res?.heat_value === 'number') setHeat(res.heat_value)
+    } catch {
+      // 保持乐观更新，不回滚
+    } finally {
+      setDisliking(false)
+      mutationInFlightRef.current = false
+    }
+  }
   const fmtHeat = (n?: number | null): string => {
     const v = Number(n || 0)
     if (!isFinite(v)) return '0'
@@ -191,15 +210,21 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     <div className={`card${selected ? ' card-selected' : ''}${highlighted ? ' highlight-pulse' : ''}`} ref={cardRef} data-media-id={item.id}>
       <div className={`card-cover${imgLoaded ? ' loaded' : ''}`} onClick={onClick} onDoubleClick={onDoubleClick} style={{ aspectRatio: aspect }}>
         {selectable && (
-          <label className="card-select-toggle" onClick={(e) => { e.stopPropagation(); onSelectToggle && onSelectToggle() }}>
-            <input type="checkbox" checked={!!selected} readOnly className="card-select-checkbox" />
+          <label className="card-select-toggle" onClick={(e) => { e.stopPropagation() }}>
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onSelectToggle && onSelectToggle(item.id)}
+              className="card-select-checkbox"
+              aria-label={`选择 ${item.title}`}
+            />
             <span className="muted">选择</span>
           </label>
         )}
         {onLocate && (
           <button
             className="card-locate-btn"
-            onClick={(e) => { e.stopPropagation(); onLocate() }}
+            onClick={(e) => { e.stopPropagation(); onLocate(item.id) }}
             title="定位到最新排序"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
@@ -239,11 +264,25 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
           <div className="play-badge"><div className="dot">▶</div></div>
         )}
         {isVideo && typeof item.duration_ms === 'number' && item.duration_ms > 0 && (
-          <div className="duration">{fmtDurZh(item.duration_ms)}</div>
+          <div className="duration">{formatDurationZh(item.duration_ms)}</div>
         )}
       </div>
       <div className="card-content">
-        <div className="title">{item.title}</div>
+        <div
+          className="title"
+          role="button"
+          tabIndex={0}
+          onClick={activate}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              activate()
+            }
+          }}
+          title="打开预览"
+        >
+          {item.title}
+        </div>
         <div className="meta">
           {item.models.map(m => (
             <button
@@ -258,8 +297,8 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
         </div>
         <div className="meta card-meta-row">
           {(() => {
-            const size = fmtSize(sizeOverride ?? item.file_size)
-            const dur = isVideo ? fmtDurZh(item.duration_ms) : null
+            const size = formatFileSize(sizeOverride ?? item.file_size)
+            const dur = isVideo ? formatDurationZh(item.duration_ms) : null
             const text = isVideo ? [size, dur].filter(Boolean).join(' · ') : size
             return text ? (<span className="card-tag">{text}</span>) : null
           })()}
@@ -271,19 +310,25 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
                 <path d="M12 21s-6.716-4.09-9.192-6.566C1.332 13.956 1 12.872 1 11.727 1 9.1 3.1 7 5.727 7c1.516 0 2.897.643 3.846 1.669L12 11.136l2.427-2.467C15.376 7.643 16.757 7 18.273 7 20.9 7 23 9.1 23 11.727c0 1.145-.332 2.229-1.808 2.707C18.716 16.91 12 21 12 21z"/>
               </svg>
             </span>
-            <span className={`heat-count${heatBumpKey ? ' bump' : ''}`} key={heatBumpKey || undefined}>{fmtHeat(dispHeat)}</span>
+            <span
+              className={`heat-count${heatBumpKey ? ' bump' : ''}`}
+              key={heatBumpKey || undefined}
+              onAnimationEnd={() => setHeatBumpKey(null)}
+            >
+              {fmtHeat(dispHeat)}
+            </span>
           </span>
           <button
             className={`pill pill-dark clickable like-btn${liking ? ' disabled' : ''}`}
             onClick={onLike}
             title="好感度+1"
             aria-label="点赞"
-            disabled={liking}
+            disabled={busy}
           >
             <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:18, height:18 }}>👍</span>
           </button>
           {flyKey && (
-            <>
+            <span className="fly-group" onAnimationEnd={() => setFlyKey(null)}>
               <span key={`fp0-${flyKey}`} className="like-particle p0" />
               <span key={`fp1-${flyKey}`} className="like-particle p1" />
               <span key={`fp2-${flyKey}`} className="like-particle p2" />
@@ -291,29 +336,11 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
               <span key={`fp4-${flyKey}`} className="like-particle p4" />
               <span key={`fp5-${flyKey}`} className="like-particle p5" />
               <span key={`fp6-${flyKey}`} className="like-particle p6" />
-            </>
+            </span>
           )}
           <button
             className={`pill pill-dark clickable dislike-btn${disliking ? ' disabled' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation()
-              const now = Date.now()
-              if (busy || (now - lastClickDownRef.current) < 420) return
-              lastClickDownRef.current = now
-              mutationInFlightRef.current = true
-              setHeat(h => (Number.isFinite(h) ? h - 1 : -1))
-              setFlyDownKey(now)
-              setDisliking(true)
-              ;(async () => {
-                try {
-                  const res = await dislikeMedia(item.id)
-                  if (typeof res?.heat_value === 'number') setHeat(res.heat_value)
-                } finally {
-                  setDisliking(false)
-                  mutationInFlightRef.current = false
-                }
-              })()
-            }}
+            onClick={onDislike}
             title="好感度-1"
             aria-label="点踩"
             disabled={busy}
@@ -321,7 +348,7 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
             <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:18, height:18 }}>👎</span>
           </button>
           {flyDownKey && (
-            <span key={`d-${flyDownKey}`} className="dislike-fly">-1</span>
+            <span key={`d-${flyDownKey}`} className="dislike-fly" onAnimationEnd={() => setFlyDownKey(null)}>-1</span>
           )}
         </div>
         {item.tags.length > 0 && (
@@ -342,3 +369,5 @@ export default function MediaCard({ item, onOpen, onOpenSystem, onLocate, highli
     </div>
   )
 }
+
+export default memo(MediaCard)

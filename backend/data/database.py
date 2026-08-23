@@ -7,6 +7,7 @@ import base64
 import json
 import secrets
 import threading
+import time as _time
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
@@ -100,6 +101,9 @@ class Database:
         # 确保数据库目录存在
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._needs_tag_count_recalc = False
+        self._access_password_cache = (None, 0.0)
+        self._true_random_count_cache = (None, 0.0)
+        self._true_random_enabled_cache = (None, 0.0)
         self.init_database()
         # 迁移新增 file_count 列后,需要全量重算一次标签计数
         if self._needs_tag_count_recalc:
@@ -109,19 +113,40 @@ class Database:
             self._schedule_tag_count_repair()
 
     def _schedule_tag_count_repair(self):
-        """后台线程全量重算标签计数,纠正增量遗漏/外部修改导致的漂移"""
+        """后台线程全量重算标签计数,纠正增量遗漏/外部修改导致的漂移。
+
+        每次启动都全量重算会无谓争抢磁盘 IO;记录上次修复时间,
+        24 小时内只做一次(手动 /api/tags/recalc 不受影响)。
+        """
         def _repair():
             try:
+                last_raw = str(self.get_app_setting('last_tag_count_repair', '') or '').strip()
+                if last_raw:
+                    try:
+                        last_at = datetime.fromisoformat(last_raw)
+                        age_seconds = (datetime.now() - last_at).total_seconds()
+                        if 0 <= age_seconds < 24 * 3600:
+                            return
+                    except ValueError:
+                        pass
                 self.recalc_tag_file_counts()
+                self.set_app_setting('last_tag_count_repair', datetime.now().isoformat())
             except Exception as e:
                 print(f"[database] 标签计数后台重算失败: {e}")
         threading.Thread(target=_repair, daemon=True).start()
     
     def get_connection(self):
-        """获取数据库连接"""
+        """获取数据库连接
+
+        WAL 下 synchronous=NORMAL 可少刷盘且不会破坏一致性;
+        temp_store=MEMORY 让排序临时 B 树优先用内存,避免查询排序反复写临时文件磨损磁盘。
+        """
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('PRAGMA busy_timeout = 30000')
+        conn.execute('PRAGMA synchronous = NORMAL')
+        conn.execute('PRAGMA temp_store = MEMORY')
         return conn
 
     def transaction(self):
@@ -441,12 +466,26 @@ class Database:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_model_tags_model_id ON model_tags(model_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_model_tags_tag_id ON model_tags(tag_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_category_id ON tags(category_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_created_at ON files(created_at)')
+        # 复合排序索引:让 ORDER BY 直接走索引,避免每次查询都全表扫描 + 临时 B 树排序。
+        # 第二个键 id 保持 ASC,与现有 ORDER BY (..., f.id) 一致。
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_created_at_id ON files(created_at DESC, id ASC)')
+        cursor.execute('DROP INDEX IF EXISTS idx_files_created_at')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_heat_value ON files(heat_value)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_models_sort_order ON models(sort_order)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_sort_order ON tags(sort_order)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_duration_ms ON files(duration_ms)')
+        # COALESCE 表达式索引必须与查询中的 ORDER BY 表达式逐字一致,SQLite 才能命中。
+        # 旧单列 duration 索引已由下方复合索引覆盖排序需求;heat 单列索引保留给范围筛选。
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_duration_order ON files(COALESCE(duration_ms, 0) DESC, created_at DESC, id ASC)')
+            cursor.execute('DROP INDEX IF EXISTS idx_files_duration_ms')
+        except sqlite3.OperationalError:
+            # 极旧 SQLite 不支持表达式索引时保留旧索引,排序仍可工作
+            pass
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_heat_order ON files(COALESCE(heat_value, 0) DESC, created_at DESC, id ASC)')
+        except sqlite3.OperationalError:
+            pass
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tag_categories (
@@ -505,6 +544,8 @@ class Database:
         except Exception:
             pass
         conn.commit()
+        # 初始密码已变化,清空验证缓存,下一次鉴权从 DB 读取
+        self._access_password_cache = (None, 0.0)
 
     def _migrate_database_if_needed(self, cursor):
         """迁移数据库：将INTEGER ID转换为GUID"""
@@ -1250,21 +1291,27 @@ class Database:
 
         只应在低频场景调用（迁移后、删除模特后、测试），单次约几百毫秒。
         日常计数由写路径通过 _adjust_tag_counts 增量维护。
+        只 UPDATE 实际发生变化的标签,避免每次启动兜底重算时无差别写 tags 表。
         """
         with self.transaction() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE tags SET file_count = COALESCE((
-                    SELECT COUNT(DISTINCT file_id) FROM (
-                        SELECT tag_id, file_id FROM file_tags WHERE tag_id = tags.id
+            cursor.execute('SELECT id, file_count FROM tags')
+            old_counts = [(r['id'], int(r['file_count'] or 0)) for r in cursor.fetchall()]
+            for tag_id, old_count in old_counts:
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT file_id) AS n FROM (
+                        SELECT file_id FROM file_tags WHERE tag_id = ?
                         UNION
-                        SELECT mt.tag_id, fm.file_id
+                        SELECT fm.file_id
                         FROM model_tags mt
                         JOIN file_models fm ON fm.model_id = mt.model_id
-                        WHERE mt.tag_id = tags.id
+                        WHERE mt.tag_id = ?
                     )
-                ), 0)
-            ''')
+                ''', (tag_id, tag_id))
+                row = cursor.fetchone()
+                new_count = int((row['n'] if row else 0) or 0)
+                if new_count != old_count:
+                    cursor.execute('UPDATE tags SET file_count = ? WHERE id = ?', (new_count, tag_id))
 
     def _get_inherited_tags_for_models(self, cursor, model_ids):
         """获取指定模特集合继承的所有标签 id（模特标签并集）"""
@@ -1298,23 +1345,25 @@ class Database:
         if dec:
             ph = ','.join('?' * len(dec))
             cursor.execute(
-                f'UPDATE tags SET file_count = COALESCE(file_count, 0) - 1 WHERE id IN ({ph})',
+                # MAX(0, …) 兜底:任何异常扣减都不得让计数跌为负数
+                f'UPDATE tags SET file_count = MAX(0, COALESCE(file_count, 0) - 1) WHERE id IN ({ph})',
                 list(dec)
             )
 
-    def get_tags_with_category_name(self, only_active=False, with_file_count=True):
+    def get_tags_with_category_name(self, only_active=False, with_file_count=True, include_preview=True):
         # file_count 持久化在 tags.file_count 列（写路径增量维护），
         # 直接读列避免每次实时聚合 file_tags ∪ model_tags×file_models 的几十万行
+        preview_col = 't.preview_image_path' if include_preview else 'NULL AS preview_image_path'
         if with_file_count:
-            base_sql = '''
+            base_sql = f'''
                 SELECT t.*, c.name AS category_name, COALESCE(t.file_count, 0) AS file_count
                 FROM tags t
                 LEFT JOIN tag_categories c ON t.category_id = c.id
             '''
         else:
-            base_sql = '''
+            base_sql = f'''
                 SELECT t.id, t.name, t.is_active, t.sort_order, t.category_id,
-                       t.preview_image_path, t.description, t.created_at, t.updated_at,
+                       {preview_col}, t.description, t.created_at, t.updated_at,
                        c.name AS category_name
                 FROM tags t
                 LEFT JOIN tag_categories c ON t.category_id = c.id
@@ -1694,6 +1743,19 @@ class Database:
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
+
+    def get_file_by_md5(self, md5_value):
+        """按 MD5 查找已入库文件（批量导入去重用）"""
+        if not md5_value:
+            return None
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM files WHERE md5 = ? LIMIT 1', (md5_value,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
     
     def get_file_by_id(self, file_id):
         return self._query('SELECT * FROM files WHERE id = ?', (file_id,), fetch='one')
@@ -1915,14 +1977,15 @@ class Database:
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         try:
+            # 必须在 INSERT 之前取旧继承集,否则新模特标签会被误当成旧状态,导致继承标签漏计数
+            old_inherited = self._get_inherited_tags(cursor, file_id)
+            old_direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
             relation_id = self._generate_guid()
             cursor.execute('''
                 INSERT INTO file_models (id, file_id, model_id, created_at)
                 VALUES (?, ?, ?, ?)
             ''', (relation_id, file_id, model_id, now))
             # 新增模特可能带来新的继承标签
-            old_inherited = self._get_inherited_tags(cursor, file_id)
-            old_direct = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM file_tags WHERE file_id = ?', (file_id,))}
             new_inherited = old_inherited | self._get_inherited_tags_for_models(cursor, [model_id])
             self._adjust_tag_counts(cursor, old_direct, old_direct, old_inherited, new_inherited)
             conn.commit()
@@ -2003,9 +2066,14 @@ class Database:
             DELETE FROM file_tags
             WHERE file_id = ? AND tag_id = ?
         ''', (file_id, tag_id))
+        if cursor.rowcount == 0:
+            # 关联本就不存在(重复移除/批量移除未命中),不得扣减计数
+            conn.commit()
+            conn.close()
+            return True
         # 该 tag 仍通过模特继承计入时,不扣减
         if tag_id not in self._get_inherited_tags(cursor, file_id):
-            cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) - 1 WHERE id = ?', (tag_id,))
+            cursor.execute('UPDATE tags SET file_count = MAX(0, COALESCE(file_count, 0) - 1) WHERE id = ?', (tag_id,))
         conn.commit()
         conn.close()
         return True
@@ -2016,18 +2084,25 @@ class Database:
             (file_id,)
         )
 
-    def get_files_models_batch(self, file_ids):
+    def get_files_models_batch(self, file_ids, include_preview=True):
         if not file_ids:
             return {}
         conn = self.get_connection()
         cursor = conn.cursor()
         result = {fid: [] for fid in file_ids}
+        if include_preview:
+            select_cols = 'm.*'
+        else:
+            # /api/media 的卡片只需 id/name/type,不读可能很大的 base64 预览列
+            select_cols = ('m.id, m.name, NULL AS preview_image_path, m.model_type, '
+                           'm.model_type_id, m.is_active, m.description, m.sort_order, '
+                           'm.created_at, m.updated_at')
         chunk_size = 900
         for i in range(0, len(file_ids), chunk_size):
             chunk = file_ids[i:i + chunk_size]
             placeholders = ','.join(['?'] * len(chunk))
             cursor.execute(
-                f'SELECT fm.file_id, m.* FROM file_models fm INNER JOIN models m ON fm.model_id = m.id WHERE fm.file_id IN ({placeholders}) ORDER BY m.name',
+                f'SELECT fm.file_id, {select_cols} FROM file_models fm INNER JOIN models m ON fm.model_id = m.id WHERE fm.file_id IN ({placeholders}) ORDER BY m.name',
                 chunk
             )
             for row in cursor.fetchall():
@@ -2036,18 +2111,21 @@ class Database:
         conn.close()
         return result
 
-    def get_files_tags_batch(self, file_ids):
+    def get_files_tags_batch(self, file_ids, include_preview=True):
         if not file_ids:
             return {}
         conn = self.get_connection()
         cursor = conn.cursor()
         result = {fid: [] for fid in file_ids}
+        select_cols = 't.*' if include_preview else ('t.id, t.name, NULL AS preview_image_path, '
+                                                     't.is_active, t.description, t.sort_order, '
+                                                     't.category_id, t.created_at, t.updated_at, t.file_count')
         chunk_size = 900
         for i in range(0, len(file_ids), chunk_size):
             chunk = file_ids[i:i + chunk_size]
             placeholders = ','.join(['?'] * len(chunk))
             cursor.execute(
-                f'SELECT ft.file_id, t.* FROM file_tags ft INNER JOIN tags t ON ft.tag_id = t.id WHERE ft.file_id IN ({placeholders}) ORDER BY t.name',
+                f'SELECT ft.file_id, {select_cols} FROM file_tags ft INNER JOIN tags t ON ft.tag_id = t.id WHERE ft.file_id IN ({placeholders}) ORDER BY t.name',
                 chunk
             )
             for row in cursor.fetchall():
@@ -2056,18 +2134,21 @@ class Database:
         conn.close()
         return result
 
-    def get_models_tags_batch(self, model_ids):
+    def get_models_tags_batch(self, model_ids, include_preview=True):
         if not model_ids:
             return {}
         conn = self.get_connection()
         cursor = conn.cursor()
         result = {mid: [] for mid in model_ids}
+        select_cols = 't.*' if include_preview else ('t.id, t.name, NULL AS preview_image_path, '
+                                                     't.is_active, t.description, t.sort_order, '
+                                                     't.category_id, t.created_at, t.updated_at, t.file_count')
         chunk_size = 900
         for i in range(0, len(model_ids), chunk_size):
             chunk = model_ids[i:i + chunk_size]
             placeholders = ','.join(['?'] * len(chunk))
             cursor.execute(
-                f'SELECT mt.model_id, t.* FROM model_tags mt INNER JOIN tags t ON mt.tag_id = t.id WHERE mt.model_id IN ({placeholders}) ORDER BY t.name',
+                f'SELECT mt.model_id, {select_cols} FROM model_tags mt INNER JOIN tags t ON mt.tag_id = t.id WHERE mt.model_id IN ({placeholders}) ORDER BY t.name',
                 chunk
             )
             for row in cursor.fetchall():
@@ -2107,14 +2188,22 @@ class Database:
                 INSERT INTO model_tags (id, model_id, tag_id, created_at)
                 VALUES (?, ?, ?, ?)
             ''', (relation_id, model_id, tag_id, now))
-            # 该模特下没有直接打此标签的文件,才通过继承新增计数
+            # 仅"本模特下、无直接标签、且未从其他模特继承该标签"的文件新增计数
+            # (直接标签/其他模特继承都已计过数,不能重复累加)
             cursor.execute('''
-                SELECT COUNT(*) AS n FROM file_models fm
-                WHERE fm.model_id = ? AND NOT EXISTS (
-                    SELECT 1 FROM file_tags ft
-                    WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
-                )
-            ''', (model_id, tag_id))
+                SELECT COUNT(DISTINCT fm.file_id) AS n
+                FROM file_models fm
+                WHERE fm.model_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM file_tags ft
+                      WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM file_models fm2
+                      JOIN model_tags mt2 ON mt2.model_id = fm2.model_id
+                      WHERE fm2.file_id = fm.file_id AND mt2.tag_id = ? AND fm2.model_id != ?
+                  )
+            ''', (model_id, tag_id, tag_id, model_id))
             n = cursor.fetchone()['n']
             if n:
                 cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) + ? WHERE id = ?', (n, tag_id))
@@ -2129,21 +2218,33 @@ class Database:
         """移除模特的标签关联"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        # 移除继承后,该模特下直接带此标签的文件仍计入(直接关联),其余不再计入
-        cursor.execute('''
-            SELECT COUNT(*) AS n FROM file_models fm
-            WHERE fm.model_id = ? AND NOT EXISTS (
-                SELECT 1 FROM file_tags ft
-                WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
-            )
-        ''', (model_id, tag_id))
-        n = cursor.fetchone()['n']
         cursor.execute('''
             DELETE FROM model_tags
             WHERE model_id = ? AND tag_id = ?
         ''', (model_id, tag_id))
+        if cursor.rowcount == 0:
+            # 关联本就不存在(重复移除),不得扣减计数
+            conn.commit()
+            conn.close()
+            return True
+        # 仅"本模特下、无直接标签、且移除后不再从其他模特继承该标签"的文件扣减计数
+        cursor.execute('''
+            SELECT COUNT(DISTINCT fm.file_id) AS n
+            FROM file_models fm
+            WHERE fm.model_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM file_tags ft
+                  WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM file_models fm2
+                  JOIN model_tags mt2 ON mt2.model_id = fm2.model_id
+                  WHERE fm2.file_id = fm.file_id AND mt2.tag_id = ? AND fm2.model_id != ?
+              )
+        ''', (model_id, tag_id, tag_id, model_id))
+        n = cursor.fetchone()['n']
         if n:
-            cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) - ? WHERE id = ?', (n, tag_id))
+            cursor.execute('UPDATE tags SET file_count = MAX(0, COALESCE(file_count, 0) - ?) WHERE id = ?', (n, tag_id))
         conn.commit()
         conn.close()
         return True
@@ -2160,6 +2261,28 @@ class Database:
             cursor = conn.cursor()
             now = datetime.now().isoformat()
             old_tags = {r['tag_id'] for r in cursor.execute('SELECT tag_id FROM model_tags WHERE model_id = ?', (model_id,))}
+            new_tags = set(tag_ids)
+            removed = old_tags - new_tags
+            added = new_tags - old_tags
+            # 移除的标签:该模特仍持有旧标签,查询时排除自身,统计"移除后真正不再计入"的文件
+            for tag_id in removed:
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT fm.file_id) AS n
+                    FROM file_models fm
+                    WHERE fm.model_id = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM file_tags ft
+                          WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM file_models fm2
+                          JOIN model_tags mt2 ON mt2.model_id = fm2.model_id
+                          WHERE fm2.file_id = fm.file_id AND mt2.tag_id = ? AND fm2.model_id != ?
+                      )
+                ''', (model_id, tag_id, tag_id, model_id))
+                n = cursor.fetchone()['n']
+                if n:
+                    cursor.execute('UPDATE tags SET file_count = MAX(0, COALESCE(file_count, 0) - ?) WHERE id = ?', (n, tag_id))
             cursor.execute('DELETE FROM model_tags WHERE model_id = ?', (model_id,))
             for tag_id in tag_ids:
                 relation_id = self._generate_guid()
@@ -2167,21 +2290,25 @@ class Database:
                     INSERT INTO model_tags (id, model_id, tag_id, created_at)
                     VALUES (?, ?, ?, ?)
                 ''', (relation_id, model_id, tag_id, now))
-            # 增量：被移除/新增的标签对该模特下"无直接标签"的文件计数 ±1
-            removed = old_tags - set(tag_ids)
-            added = set(tag_ids) - old_tags
-            for tag_id in removed | added:
-                sign = 1 if tag_id in added else -1
+            # 新增的标签:该模特已持有新标签,查询时排除自身,统计"真正新计入"的文件
+            for tag_id in added:
                 cursor.execute('''
-                    SELECT COUNT(*) AS n FROM file_models fm
-                    WHERE fm.model_id = ? AND NOT EXISTS (
-                        SELECT 1 FROM file_tags ft
-                        WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
-                    )
-                ''', (model_id, tag_id))
+                    SELECT COUNT(DISTINCT fm.file_id) AS n
+                    FROM file_models fm
+                    WHERE fm.model_id = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM file_tags ft
+                          WHERE ft.file_id = fm.file_id AND ft.tag_id = ?
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM file_models fm2
+                          JOIN model_tags mt2 ON mt2.model_id = fm2.model_id
+                          WHERE fm2.file_id = fm.file_id AND mt2.tag_id = ? AND fm2.model_id != ?
+                      )
+                ''', (model_id, tag_id, tag_id, model_id))
                 n = cursor.fetchone()['n']
                 if n:
-                    cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) + ? WHERE id = ?', (sign * n, tag_id))
+                    cursor.execute('UPDATE tags SET file_count = COALESCE(file_count, 0) + ? WHERE id = ?', (n, tag_id))
             return True
     
     # ========== 文件查询相关操作 ==========
@@ -2241,12 +2368,20 @@ class Database:
         return True
 
     def get_true_random_cache_enabled(self):
-        value = str(self.get_app_setting('true_random_cache_enabled', '1')).strip().lower()
-        return value not in ('0', 'false', 'off', 'no')
+        now = _time.monotonic()
+        value, expires = self._true_random_enabled_cache
+        if expires > now:
+            return bool(value)
+        raw = str(self.get_app_setting('true_random_cache_enabled', '1')).strip().lower()
+        value = raw not in ('0', 'false', 'off', 'no')
+        self._true_random_enabled_cache = (value, now + 5.0)
+        return value
 
     def set_true_random_cache_enabled(self, enabled):
         self.set_app_setting('true_random_cache_enabled', '1' if bool(enabled) else '0')
-        return self.get_true_random_cache_enabled()
+        value = bool(enabled)
+        self._true_random_enabled_cache = (value, _time.monotonic() + 5.0)
+        return value
 
     def get_auto_save_enabled(self):
         """获取自动保存开关状态，默认关闭"""
@@ -2288,6 +2423,8 @@ class Database:
                 )
                 inserted += int(cursor.rowcount or 0)
             conn.commit()
+            if inserted:
+                self._true_random_count_cache = (None, 0.0)
             return inserted
         except Exception:
             conn.rollback()
@@ -2304,22 +2441,31 @@ class Database:
         cursor.execute('DELETE FROM true_random_cache')
         conn.commit()
         conn.close()
+        self._true_random_count_cache = (0, _time.monotonic() + 2.0)
         return total
 
     def count_true_random_cache(self):
+        now = _time.monotonic()
+        total, expires = self._true_random_count_cache
+        if expires > now:
+            return int(total or 0)
         row = self._query('SELECT COUNT(*) AS total FROM true_random_cache', fetch='one')
-        return int((row['total'] if row else 0) or 0)
+        total = int((row['total'] if row else 0) or 0)
+        self._true_random_count_cache = (total, now + 2.0)
+        return total
 
-    def query_files_with_filters(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, offset=0, limit=30, order='recent', seed=None, name=None, blacklist_cache_key=None):
-        """按筛选条件分页查询文件，支持严格/任意匹配与排序；当提供 seed 且 order=random 时，使用可复现的伪随机顺序"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        sql = 'SELECT f.* FROM files f'
+    def _build_file_filter_clauses(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, name=None):
+        """构建 files 筛选 WHERE 子句(列表)与参数,供分页查询和排位查询共用。
+
+        - 传入 id 先去重,避免严格匹配 COUNT(DISTINCT ...) 因重复参数改变语义。
+        - strict model 匹配使用「IN 子查询 + HAVING COUNT(DISTINCT model_id)」,
+          实测比逐模特 EXISTS 快一个数量级(直接走 idx_file_models_model_id)。
+        """
         where = []
         params = []
-        mids = list(model_ids or [])
-        tids = list(tag_ids or [])
-        ex_tids = list(exclude_tag_ids or [])
+        mids = list(dict.fromkeys(model_ids or []))
+        tids = list(dict.fromkeys(tag_ids or []))
+        ex_tids = list(dict.fromkeys(exclude_tag_ids or []))
         if name:
             q = f"%{str(name).strip().lower()}%"
             where.append('('
@@ -2336,9 +2482,17 @@ class Database:
             params.append(int(max_heat))
         if mids:
             if strict:
-                for mid in mids:
-                    where.append('EXISTS (SELECT 1 FROM file_models fm WHERE fm.file_id = f.id AND fm.model_id = ?)')
-                    params.append(mid)
+                placeholders = ','.join(['?'] * len(mids))
+                where.append(
+                    f'f.id IN ('
+                    f'SELECT fm.file_id FROM file_models fm '
+                    f'WHERE fm.model_id IN ({placeholders}) '
+                    f'GROUP BY fm.file_id '
+                    f'HAVING COUNT(DISTINCT fm.model_id) = ?'
+                    f')'
+                )
+                params.extend(mids)
+                params.append(len(mids))
             else:
                 placeholders = ','.join(['?'] * len(mids))
                 where.append(f'EXISTS (SELECT 1 FROM file_models fm WHERE fm.file_id = f.id AND fm.model_id IN ({placeholders}))')
@@ -2370,19 +2524,108 @@ class Database:
                          f'WHERE fm.file_id = f.id AND mt.tag_id IN ({placeholders}))')
             params.extend(ex_tids)
             params.extend(ex_tids)
+        return where, params
+
+    def _get_rows_by_ids(self, cursor, file_ids):
+        """按给定顺序批量取回完整 file 行(避免随机模式把全表所有列拉进 Python)。"""
+        file_ids = [str(fid) for fid in (file_ids or [])]
+        if not file_ids:
+            return []
+        row_map = {}
+        chunk_size = 900
+        for i in range(0, len(file_ids), chunk_size):
+            chunk = file_ids[i:i + chunk_size]
+            placeholders = ','.join(['?'] * len(chunk))
+            cursor.execute(f'SELECT f.* FROM files f WHERE f.id IN ({placeholders})', chunk)
+            for r in cursor.fetchall():
+                row_map[r['id']] = dict(r)
+        return [row_map[fid] for fid in file_ids if fid in row_map]
+
+    def query_files_with_filters(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, offset=0, limit=30, order='recent', seed=None, name=None, blacklist_cache_key=None, cursor=None):
+        """按筛选条件分页查询文件，支持严格/任意匹配与排序；当提供 seed 且 order=random 时，使用可复现的伪随机顺序
+
+        cursor: 游标分页键（keyset），形如 "v1|v2|v3"，各段与 ORDER BY 列一一对应
+            (recent/recent_asc: created_at|id; duration*/heat*: 值|created_at|id)。
+            提供时忽略 offset（游标分页对滚动期间的新增/删除免疫，避免 OFFSET 跳页漏数据）。
+        """
+        conn = self.get_connection()
+        cur = conn.cursor()
+        sql = 'SELECT f.* FROM files f'
+        where, params = self._build_file_filter_clauses(
+            model_ids=model_ids,
+            tag_ids=tag_ids,
+            exclude_tag_ids=exclude_tag_ids,
+            strict=strict,
+            min_heat=min_heat,
+            max_heat=max_heat,
+            name=name,
+        )
         if blacklist_cache_key:
             where.append('NOT EXISTS (SELECT 1 FROM true_random_cache trc WHERE trc.cache_key = ? AND trc.file_id = f.id)')
             params.append(str(blacklist_cache_key).strip())
+        # 游标分页键（仅 SQL 原生排序使用；random/seed 路径忽略）
+        cursor_parts = None
+        if cursor and order in ('recent', 'recent_asc', 'duration', 'duration_asc', 'heat', 'heat_asc'):
+            parts = [str(p) for p in str(cursor).split('|')]
+            # 轻量校验：created_at 段须为 ISO 时间形态、id 段非空，非法游标直接忽略（回退 OFFSET）
+            def _valid_ts_id(p0, p1):
+                return bool(p0) and len(p0) >= 19 and p0[4] == '-' and p0[7] == '-' and bool(p1)
+            if order == 'recent' and len(parts) >= 2 and _valid_ts_id(parts[0], parts[1]):
+                # 显式展开排序键比较:created_at DESC, id ASC
+                cursor_parts = (
+                    '(f.created_at < ? OR f.created_at = ? AND f.id > ?)',
+                    [parts[0], parts[0], parts[1]],
+                )
+            elif order == 'recent_asc' and len(parts) >= 2 and _valid_ts_id(parts[0], parts[1]):
+                # created_at ASC, id ASC
+                cursor_parts = (
+                    '(f.created_at > ? OR f.created_at = ? AND f.id > ?)',
+                    [parts[0], parts[0], parts[1]],
+                )
+            elif order in ('duration', 'duration_asc') and len(parts) >= 3 and _valid_ts_id(parts[1], parts[2]):
+                primary_op = '<' if order == 'duration' else '>'
+                # 数值段必须转 int：SQLite 中 TEXT 恒大于数值，字符串 '7' 会让比较恒真导致死循环
+                try:
+                    first = int(parts[0])
+                except (TypeError, ValueError):
+                    first = None
+                if first is not None:
+                    # duration DESC/ASC 的次排序列均为 created_at DESC, id ASC
+                    cursor_parts = (
+                        f'(COALESCE(f.duration_ms, 0) {primary_op} ? OR '
+                        f'COALESCE(f.duration_ms, 0) = ? AND f.created_at < ? OR '
+                        f'COALESCE(f.duration_ms, 0) = ? AND f.created_at = ? AND f.id > ?)',
+                        [first, first, parts[1], first, parts[1], parts[2]],
+                    )
+            elif order in ('heat', 'heat_asc') and len(parts) >= 3 and _valid_ts_id(parts[1], parts[2]):
+                primary_op = '<' if order == 'heat' else '>'
+                try:
+                    first = int(parts[0])
+                except (TypeError, ValueError):
+                    first = None
+                if first is not None:
+                    cursor_parts = (
+                        f'(COALESCE(f.heat_value, 0) {primary_op} ? OR '
+                        f'COALESCE(f.heat_value, 0) = ? AND f.created_at < ? OR '
+                        f'COALESCE(f.heat_value, 0) = ? AND f.created_at = ? AND f.id > ?)',
+                        [first, first, parts[1], first, parts[1], parts[2]],
+                    )
+        if cursor_parts:
+            where.append(cursor_parts[0])
+            params.extend(cursor_parts[1])
         if where:
             sql += ' WHERE ' + ' AND '.join(where)
         if order in ('heat', 'heat_asc') and seed is not None:
-            cursor.execute(sql, params)
-            all_rows = [dict(r) for r in cursor.fetchall()]
+            # 只拉排序所需的 id + heat_value 两列,排序后再按 id 取回当前页完整行,
+            # 避免把全表所有列(含大字段)读进 Python。
+            sort_sql = sql.replace('SELECT f.*', 'SELECT f.id AS id, f.heat_value AS heat_value', 1)
+            cur.execute(sort_sql, params)
+            sort_rows = cur.fetchall()
             def _k(row):
-                s = f"{seed}:{row.get('id') or ''}"
+                s = f"{seed}:{row['id'] or ''}"
                 h = hashlib.md5(s.encode('utf-8')).hexdigest()
                 rand_key = int(h[:8], 16)
-                hv = row.get('heat_value')
+                hv = row['heat_value']
                 try:
                     hvn = int(hv) if hv is not None else 0
                 except Exception:
@@ -2393,65 +2636,66 @@ class Database:
                 # heat uses desc (-hvn), heat_asc uses asc (hvn)
                 val = -hvn if order == 'heat' else hvn
                 return (val, rand_key)
-            all_rows.sort(key=_k)
-            rows = all_rows[int(offset):int(offset)+int(limit)]
+            sort_rows.sort(key=_k)
+            selected_ids = [r['id'] for r in sort_rows[int(offset):int(offset)+int(limit)]]
+            rows = self._get_rows_by_ids(cur, selected_ids)
             conn.close()
             return rows
         if order == 'random':
-            # 仅在完全无筛选且无 seed 的随机浏览模式下需要加载全部行做模特分散
+            # 仅在完全无筛选且无 seed 的随机浏览模式下做「每模特最多 2 张」分散。
+            # 只需 id + 首个 model_id 两列,再按 id 取回当前页完整行。
             per_model_limit = 2 if (
-                not mids
-                and not tids
-                and not ex_tids
+                not model_ids
+                and not tag_ids
+                and not exclude_tag_ids
                 and not name
                 and min_heat is None
                 and max_heat is None
                 and seed is None
             ) else None
             if per_model_limit:
-                cursor.execute(sql, params)
-                all_rows = [dict(r) for r in cursor.fetchall()]
-                ids = [r.get('id') for r in all_rows if r.get('id')]
-                model_map = {}
-                if ids:
-                    chunk_size = 900
-                    for i in range(0, len(ids), chunk_size):
-                        chunk = ids[i:i + chunk_size]
-                        placeholders = ','.join(['?'] * len(chunk))
-                        cursor.execute(f'SELECT file_id, model_id FROM file_models WHERE file_id IN ({placeholders})', chunk)
-                        for r in cursor.fetchall():
-                            model_map.setdefault(r['file_id'], []).append(r['model_id'])
+                cur.execute('''
+                    SELECT f.id AS id, g.model_id AS first_model_id
+                    FROM files f
+                    LEFT JOIN (
+                        SELECT fm.file_id, MIN(fm.model_id) AS model_id
+                        FROM file_models fm
+                        GROUP BY fm.file_id
+                    ) g ON g.file_id = f.id
+                ''')
                 counts = {}
-                limited = []
-                for row in all_rows:
-                    fid = row.get('id')
-                    mids_for = model_map.get(fid) or []
-                    key = (sorted(mids_for)[0] if mids_for else '__none__')
+                limited_ids = []
+                for r in cur.fetchall():
+                    fid = r['id']
+                    key = r['first_model_id'] or '__none__'
                     n = counts.get(key, 0)
                     if n >= per_model_limit:
                         continue
                     counts[key] = n + 1
-                    limited.append(row)
-                random.shuffle(limited)
-                rows = limited[int(offset):int(offset)+int(limit)]
+                    limited_ids.append(fid)
+                random.shuffle(limited_ids)
+                selected_ids = limited_ids[int(offset):int(offset)+int(limit)]
+                rows = self._get_rows_by_ids(cur, selected_ids)
                 conn.close()
                 return rows
             if seed is not None:
-                cursor.execute(sql, params)
-                all_rows = [dict(r) for r in cursor.fetchall()]
+                sort_sql = sql.replace('SELECT f.*', 'SELECT f.id AS id', 1)
+                cur.execute(sort_sql, params)
+                sort_rows = cur.fetchall()
                 def _key(row):
-                    s = f"{seed}:{row.get('id') or ''}"
+                    s = f"{seed}:{row['id'] or ''}"
                     h = hashlib.md5(s.encode('utf-8')).hexdigest()
                     return int(h[:8], 16)
-                all_rows.sort(key=_key)
-                rows = all_rows[int(offset):int(offset)+int(limit)]
+                sort_rows.sort(key=_key)
+                selected_ids = [r['id'] for r in sort_rows[int(offset):int(offset)+int(limit)]]
+                rows = self._get_rows_by_ids(cur, selected_ids)
                 conn.close()
                 return rows
             # 无 seed 无模特分散：使用 SQL 级别随机排序，避免加载全部行
             sql += ' ORDER BY RANDOM() LIMIT ? OFFSET ?'
             params.extend([int(limit), int(offset)])
-            cursor.execute(sql, params)
-            rows = [dict(r) for r in cursor.fetchall()]
+            cur.execute(sql, params)
+            rows = [dict(r) for r in cur.fetchall()]
             conn.close()
             return rows
         if order == 'duration':
@@ -2466,99 +2710,105 @@ class Database:
             sql += ' ORDER BY f.created_at ASC, f.id'
         else:
             sql += ' ORDER BY f.created_at DESC, f.id'
-        sql += ' LIMIT ? OFFSET ?'
-        params.extend([int(limit), int(offset)])
-        cursor.execute(sql, params)
-        rows = [dict(r) for r in cursor.fetchall()]
+        # 游标分页：LIMIT 不带 OFFSET；无游标时退回 OFFSET 分页
+        if cursor_parts:
+            sql += ' LIMIT ?'
+            params.append(int(limit))
+        else:
+            sql += ' LIMIT ? OFFSET ?'
+            params.extend([int(limit), int(offset)])
+        cur.execute(sql, params)
+        rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         return rows
     def get_file_rank(self, file_id, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, name=None, order='recent'):
-        """返回文件在给定筛选+排序下的 0-based 排位；仅支持 SQL 原生排序，不支持 random / seed 排序"""
-        # 仅支持 SQL 原生排序
+        """返回文件在给定筛选+排序下的 0-based 排位；仅支持 SQL 原生排序，不支持 random / seed 排序
+
+        用「统计排在该文件之前的行数」代替 ROW_NUMBER() 全表窗口,
+        配合复合排序索引只扫描索引范围,不构建窗口临时 B 树。
+        """
         sql_orders = {'recent', 'recent_asc', 'duration', 'duration_asc', 'heat', 'heat_asc'}
         if order not in sql_orders:
             raise ValueError(f'get_file_rank 不支持排序: {order}')
         conn = self.get_connection()
         cursor = conn.cursor()
-        # 构建 WHERE 子句（与 query_files_with_filters 保持一致）
-        where = []
-        params = []
-        mids = list(model_ids or [])
-        tids = list(tag_ids or [])
-        ex_tids = list(exclude_tag_ids or [])
-        if name:
-            q = f"%{str(name).strip().lower()}%"
-            where.append('('
-                         'LOWER(f.file_name) LIKE ? OR '
-                         'LOWER(IFNULL(f.original_file_name, "")) LIKE ? OR '
-                         'LOWER(f.file_path) LIKE ?'
-                         ')')
-            params.extend([q, q, q])
-        if min_heat is not None:
-            where.append('f.heat_value >= ?')
-            params.append(int(min_heat))
-        if max_heat is not None:
-            where.append('f.heat_value <= ?')
-            params.append(int(max_heat))
-        if mids:
-            if strict:
-                for mid in mids:
-                    where.append('EXISTS (SELECT 1 FROM file_models fm WHERE fm.file_id = f.id AND fm.model_id = ?)')
-                    params.append(mid)
-            else:
-                placeholders = ','.join(['?'] * len(mids))
-                where.append(f'EXISTS (SELECT 1 FROM file_models fm WHERE fm.file_id = f.id AND fm.model_id IN ({placeholders}))')
-                params.extend(mids)
-        if tids:
-            if strict:
-                for tid in tids:
-                    where.append('('
-                                 'EXISTS (SELECT 1 FROM file_tags ft WHERE ft.file_id = f.id AND ft.tag_id = ?)'
-                                 ' OR '
-                                 'EXISTS (SELECT 1 FROM model_tags mt JOIN file_models fm ON fm.model_id = mt.model_id '
-                                 '        WHERE fm.file_id = f.id AND mt.tag_id = ?)'
-                                 ')')
-                    params.extend([tid, tid])
-            else:
-                placeholders = ','.join(['?'] * len(tids))
-                where.append('('
-                             f'EXISTS (SELECT 1 FROM file_tags ft WHERE ft.file_id = f.id AND ft.tag_id IN ({placeholders}))'
-                             ' OR '
-                             f'EXISTS (SELECT 1 FROM model_tags mt JOIN file_models fm ON fm.model_id = mt.model_id '
-                             f'        WHERE fm.file_id = f.id AND mt.tag_id IN ({placeholders}))'
-                             ')')
-                params.extend(tids)
-                params.extend(tids)
-        if ex_tids:
-            placeholders = ','.join(['?'] * len(ex_tids))
-            where.append(f'NOT EXISTS (SELECT 1 FROM file_tags ft WHERE ft.file_id = f.id AND ft.tag_id IN ({placeholders}))')
-            where.append('NOT EXISTS (SELECT 1 FROM model_tags mt JOIN file_models fm ON fm.model_id = mt.model_id '
-                         f'WHERE fm.file_id = f.id AND mt.tag_id IN ({placeholders}))')
-            params.extend(ex_tids)
-            params.extend(ex_tids)
-        # 构建排序子句
+        where, params = self._build_file_filter_clauses(
+            model_ids=model_ids,
+            tag_ids=tag_ids,
+            exclude_tag_ids=exclude_tag_ids,
+            strict=strict,
+            min_heat=min_heat,
+            max_heat=max_heat,
+            name=name,
+        )
+        # 先取目标行的排序字段;文件不存在时与旧实现一致返回 None
+        cursor.execute('SELECT id, created_at, duration_ms, heat_value FROM files WHERE id = ?', (file_id,))
+        target = cursor.fetchone()
+        if target is None:
+            conn.close()
+            return None
+        # 目标行自身也必须满足筛选条件,否则不在结果集中
+        if where:
+            target_where = ' AND '.join(where + ['f.id = ?'])
+            cursor.execute(f'SELECT 1 FROM files f WHERE {target_where} LIMIT 1', params + [file_id])
+            if cursor.fetchone() is None:
+                conn.close()
+                return None
+
+        def _to_int(value):
+            if value is None:
+                return 0
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                try:
+                    return int(float(value))
+                except (TypeError, ValueError):
+                    return 0
+
+        target_duration = _to_int(target['duration_ms'])
+        target_heat = _to_int(target['heat_value'])
+        # 行值比较在含 NULL/COALESCE 的列上不可靠,这里展开成等价的 AND/OR 条件,
+        # 让 SQLite 能命中复合索引并且结果与 ROW_NUMBER() 一致。
+        clauses = list(where)
         if order == 'duration':
-            order_clause = 'ORDER BY COALESCE(f.duration_ms, 0) DESC, f.created_at DESC, f.id'
+            expr = 'COALESCE(f.duration_ms, 0)'
+            primary_op = '>'
+            target_primary = target_duration
         elif order == 'duration_asc':
-            order_clause = 'ORDER BY COALESCE(f.duration_ms, 0) ASC, f.created_at DESC, f.id'
+            expr = 'COALESCE(f.duration_ms, 0)'
+            primary_op = '<'
+            target_primary = target_duration
         elif order == 'heat':
-            order_clause = 'ORDER BY COALESCE(f.heat_value, 0) DESC, f.created_at DESC, f.id'
+            expr = 'COALESCE(f.heat_value, 0)'
+            primary_op = '>'
+            target_primary = target_heat
         elif order == 'heat_asc':
-            order_clause = 'ORDER BY COALESCE(f.heat_value, 0) ASC, f.created_at DESC, f.id'
+            expr = 'COALESCE(f.heat_value, 0)'
+            primary_op = '<'
+            target_primary = target_heat
+        else:
+            expr = None
+
+        if expr is not None:
+            # 次排序列固定为 created_at DESC, id ASC
+            clauses.append(f'({expr} {primary_op} ? OR '
+                           f'{expr} = ? AND f.created_at > ? OR '
+                           f'{expr} = ? AND f.created_at = ? AND f.id < ?)')
+            params.extend([target_primary,
+                           target_primary, target['created_at'],
+                           target_primary, target['created_at'], target['id']])
         elif order == 'recent_asc':
-            order_clause = 'ORDER BY f.created_at ASC, f.id'
-        else:  # recent (默认)
-            order_clause = 'ORDER BY f.created_at DESC, f.id'
-        # 构建 CTE 查询
-        where_sql = (' WHERE ' + ' AND '.join(where)) if where else ''
-        sql = f'WITH filtered AS (SELECT f.id, ROW_NUMBER() OVER ({order_clause}) - 1 AS rank FROM files f{where_sql}) SELECT rank FROM filtered WHERE id = ?'
-        params.append(file_id)
-        cursor.execute(sql, params)
+            clauses.append('(f.created_at < ? OR f.created_at = ? AND f.id < ?)')
+            params.extend([target['created_at'], target['created_at'], target['id']])
+        else:  # recent (默认): created_at DESC, id ASC
+            clauses.append('(f.created_at > ? OR f.created_at = ? AND f.id < ?)')
+            params.extend([target['created_at'], target['created_at'], target['id']])
+        count_sql = f'SELECT COUNT(*) AS total FROM files f WHERE ' + ' AND '.join(clauses)
+        cursor.execute(count_sql, params)
         row = cursor.fetchone()
         conn.close()
-        if row is None:
-            return None  # 文件不在筛选结果中
-        return row['rank']
+        return int((row['total'] if row else 0) or 0)
 
     def _migrate_remove_recommend_value(self, cursor):
         cursor.execute('PRAGMA foreign_keys = OFF')
@@ -2622,8 +2872,9 @@ class Database:
             if f.get('thumbnail_path'):
                 f['thumbnail_path'] = resolve_abs(f['thumbnail_path'])
         file_ids = [f['id'] for f in files]
-        models_map = self.get_files_models_batch(file_ids)
-        tags_map = self.get_files_tags_batch(file_ids)
+        # 导出/筛选只需要 id/name,不带预览大字段,避免把 base64 图片整表读进内存
+        models_map = self.get_files_models_batch(file_ids, include_preview=False)
+        tags_map = self.get_files_tags_batch(file_ids, include_preview=False)
         result = []
         for file in files:
             file_id = file['id']
@@ -2634,22 +2885,34 @@ class Database:
             })
         return result
     
+    def _get_access_password(self):
+        """读取当前访问码(带 2 秒内存缓存)。
+
+        require_access 会对每张缩略图/媒体文件请求做鉴权;若每次 SELECT 一次 DB,
+        等于每加载一张图就多一次数据库读。缓存后只有密码轮换时才重新读库。
+        TTL 让多 worker 场景下轮换后最多 2 秒即可收敛。
+        """
+        now = _time.monotonic()
+        code, expires = self._access_password_cache
+        if expires > now:
+            return code
+        row = self._query('SELECT code FROM access_password WHERE id = ?', ('current',), fetch='one')
+        code = (str(row['code']) if row and row['code'] else None)
+        self._access_password_cache = (code, now + 2.0)
+        return code
+
     def rotate_access_password(self):
         with self.transaction() as conn:
             cursor = conn.cursor()
             code = secrets.token_urlsafe(6)
             now = datetime.now().isoformat()
             cursor.execute('UPDATE access_password SET code = ?, created_at = ? WHERE id = ?', (code, now, 'current'))
-            return code
+        self._access_password_cache = (code, _time.monotonic() + 2.0)
+        return code
     
     def validate_access_password(self, code):
-        row = self._query('SELECT code FROM access_password WHERE id = ?', ('current',), fetch='one')
-        return bool(row and str(row['code'] or '') == str(code or ''))
+        current = self._get_access_password()
+        return bool(current and current == str(code or ''))
     
     def get_current_access_password(self):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT code FROM access_password WHERE id = ?', ('current',))
-        row = cursor.fetchone()
-        conn.close()
-        return (row['code'] if row else None)
+        return self._get_access_password()

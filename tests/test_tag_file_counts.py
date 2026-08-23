@@ -153,6 +153,75 @@ class TagFileCountsTestCase(unittest.TestCase):
         counts = self.get_counts()
         self.assertEqual(counts[self.tag_b], 0)
 
+    def test_add_file_model_counts_new_inherited_tags(self):
+        """修复:add_file_model 必须在 INSERT 前取旧继承集,否则继承标签漏计数"""
+        # 先给模特打标签,再把文件挂上模特 → 应计数 1
+        other_model = self.db.add_model("model-with-tag")
+        self.db.add_model_tag(other_model, self.tag_b)
+        self.db.add_file_model(self.file_ids[0], other_model)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+
+    def test_multi_model_overlap_no_double_count(self):
+        """修复:多模特共享同一标签时,同一文件只计一次(直接∪继承去重)"""
+        m2 = self.db.add_model("model2")
+        self.db.add_file_model(self.file_ids[0], self.model_id)
+        self.db.add_file_model(self.file_ids[0], m2)
+        # 两个模特先后挂上同一标签 → 文件只计一次
+        self.db.add_model_tag(self.model_id, self.tag_b)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+        self.db.add_model_tag(m2, self.tag_b)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+        # 移除一个模特上的标签,文件仍从另一模特继承 → 计数不变
+        self.db.remove_model_tag(self.model_id, self.tag_b)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+        # 移除最后一个 → 归零
+        self.db.remove_model_tag(m2, self.tag_b)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 0)
+
+    def test_multi_model_overlap_set_model_tags(self):
+        """修复:set_model_tags 在多模特共享标签时不得重复计/重复扣"""
+        m2 = self.db.add_model("model2")
+        self.db.add_file_model(self.file_ids[0], self.model_id)
+        self.db.add_file_model(self.file_ids[0], m2)
+        self.db.set_model_tags(m2, [self.tag_b])
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+        # 给另一模特也设同一标签 → 仍为 1
+        self.db.set_model_tags(self.model_id, [self.tag_b])
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+        # 从第一个模特移除,文件仍经第二个模特继承 → 仍为 1
+        self.db.set_model_tags(m2, [])
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+
+    def test_remove_missing_file_tag_no_drift(self):
+        """修复:移除不存在的文件-标签关联时不得扣减计数(否则计数会跌成负数)"""
+        self.db.add_file_tag(self.file_ids[0], self.tag_a)
+        self.assertEqual(self.get_counts()[self.tag_a], 1)
+        self.db.remove_file_tag(self.file_ids[0], self.tag_a)
+        self.assertEqual(self.get_counts()[self.tag_a], 0)
+        # 重复移除:关联已不存在,计数保持 0 而非 -1
+        self.db.remove_file_tag(self.file_ids[0], self.tag_a)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_a], 0)
+
+    def test_remove_missing_model_tag_no_drift(self):
+        """修复:移除不存在的模特-标签关联时不得扣减计数"""
+        self.db.add_file_model(self.file_ids[0], self.model_id)
+        self.db.add_model_tag(self.model_id, self.tag_b)
+        self.assertEqual(self.get_counts()[self.tag_b], 1)
+        self.db.remove_model_tag(self.model_id, self.tag_b)
+        self.assertEqual(self.get_counts()[self.tag_b], 0)
+        # 重复移除:关联已不存在,计数保持 0 而非 -1
+        self.db.remove_model_tag(self.model_id, self.tag_b)
+        self.assert_incremental_matches_recalc()
+        self.assertEqual(self.get_counts()[self.tag_b], 0)
+
     def test_get_tags_with_category_name(self):
         self.db.add_file_tag(self.file_ids[0], self.tag_a)
         rows = self.db.get_tags_with_category_name(only_active=False)

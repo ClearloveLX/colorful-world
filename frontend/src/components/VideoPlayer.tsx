@@ -101,7 +101,6 @@ export default function VideoPlayer({ src, onLoadedMetadata, autoplay = true, in
   const onMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const el = e.currentTarget
     setDur(el.duration || 0)
-    el.volume = Math.max(0, Math.min(1, initialVolume))
     if (autoplay) {
       el.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
     }

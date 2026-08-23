@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, bulkBlacklist, fetchTags, openInSystem } from '../api'
 import type { MediaItem } from '../types'
 import MediaCard from './MediaCard'
@@ -7,6 +7,7 @@ import VideoPlayer from './VideoPlayer'
 import TagPicker from './TagPicker'
 import BulkBar from './BulkBar'
 import { scrollWindowToTop } from '../utils/scrollToTop'
+import { formatDurationZh, formatFileSize, isVideoFile, stripMediaExtension } from '../utils/format'
 
 type Props = {
   modelIds: string[]
@@ -42,6 +43,8 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [vSize, setVSize] = useState<number | null>(null)
   const sentinel = useRef<HTMLDivElement | null>(null)
   const fetchedKeysRef = useRef<Set<string>>(new Set())
+  /** keyset 游标：当前列表最后一项的排序键，向前翻页时传给后端（避免 OFFSET 跳页漏数据） */
+  const cursorRef = useRef<string | null>(null)
   const [reloadHint, setReloadHint] = useState(false)
   const initialLoadedRef = useRef<boolean>(false)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
@@ -50,6 +53,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [colWidth, setColWidth] = useState<number>(cardWidthTarget)
   const filterKeyRef = useRef<string>('')
   const prefetchedRef = useRef<Set<string>>(new Set())
+  /** 窗口裁剪：最多保留的卡片数（10 页 × 60），超出从头部丢弃，防止长翻页内存/卡顿失控 */
+  const MAX_ITEMS = 600
+  /** item id → 所在页码，裁剪时用于推算最早页 */
+  const pageOfRef = useRef<Map<string, number>>(new Map())
   const [selectMode, setSelectMode] = useState<boolean>(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [pickerOpen, setPickerOpen] = useState<{ type:'add'|'remove'|null }>({ type: null })
@@ -73,11 +80,28 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [toastMsg, setToastMsg] = useState<string>('')
   const [toastVisible, setToastVisible] = useState<boolean>(false)
+  const toastTimerRef = useRef<number | null>(null)
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg)
+    setToastVisible(true)
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => setToastVisible(false), 3000)
+  }, [])
   const locateProcessingRef = useRef<boolean>(false)
   const locateFileIdRef = useRef<string | null>(null)
   const earliestPageRef = useRef<number>(1)
   const [showPrevPageBtn, setShowPrevPageBtn] = useState(false)
   const manualLoadMore = selectMode && order === 'random' && randomMode === 'true_random' && trueRandomCacheEnabled
+  const handleOpen = useCallback((idx: number) => setSelectedIndex(idx), [])
+  const handleOpenSystem = useCallback((path: string) => { void openInSystem(path) }, [])
+  const handleLocate = useCallback((id: string) => { onLocateRequest?.(id) }, [onLocateRequest])
+  const handleSelectToggle = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const s = new Set(prev)
+      if (s.has(id)) s.delete(id); else s.add(id)
+      return s
+    })
+  }, [])
   useEffect(() => {
     ;(async () => {
       try {
@@ -111,6 +135,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         window.clearTimeout(retryTimerRef.current)
         retryTimerRef.current = null
       }
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current)
+        toastTimerRef.current = null
+      }
     }
   }, [])
   useEffect(() => {
@@ -133,7 +161,9 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     loadingRef.current = false
     fetchedKeysRef.current.clear()
     retryCountsRef.current.clear()
+    cursorRef.current = null
     earliestPageRef.current = 1
+    pageOfRef.current.clear()
     setShowPrevPageBtn(false)
     if (retryTimerRef.current) {
       window.clearTimeout(retryTimerRef.current)
@@ -164,12 +194,13 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         min_heat: minHeat,
         max_heat: maxHeat,
         order,
-        seed,
+        seed: order === 'random' ? seed : undefined,
         name: nameSearch,
         edit_mode: selectMode,
         true_random: order === 'random' && randomMode === 'true_random',
       })
       fetchedKeysRef.current.add(`${prevPage}|${filterSig}`)
+      res.items.forEach(it => pageOfRef.current.set(it.id, prevPage))
       setItems(prev => {
         const seen = new Set(prev.map(i => i.id))
         const newItems = res.items.filter(it => !seen.has(it.id))
@@ -210,14 +241,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       const r = await bulkBlacklist(ids)
       setSelectedIds(new Set())
       const msg = `已加入黑名单 ${r.updated} 个` + (r.skipped > 0 ? `，跳过 ${r.skipped} 个` : '') + (r.errors > 0 ? `，失败 ${r.errors} 个` : '')
-      setToastMsg(msg)
-      setToastVisible(true)
-      setTimeout(() => setToastVisible(false), 3000)
+      showToast(msg)
       triggerRefresh()
     } catch {
-      setToastMsg('批量删除失败，请稍后重试')
-      setToastVisible(true)
-      setTimeout(() => setToastVisible(false), 3000)
+      showToast('批量删除失败，请稍后重试')
     }
   }
   useEffect(() => {
@@ -499,7 +526,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           min_heat: minHeat,
           max_heat: maxHeat,
           order,
-          seed,
+          seed: order === 'random' ? seed : undefined,
           name: nameSearch,
           edit_mode: selectMode,
           true_random: order === 'random' && randomMode === 'true_random',
@@ -516,6 +543,8 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         // 重置状态
         fetchedKeysRef.current.clear()
         retryCountsRef.current.clear()
+        pageOfRef.current.clear()
+        res.items.forEach(it => pageOfRef.current.set(it.id, pos.page))
         fetchedKeysRef.current.add(`${pos.page}|${filterSig}`)
         earliestPageRef.current = pos.page
         setShowPrevPageBtn(pos.page > 1)
@@ -525,6 +554,18 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         setLoading(false)
         hasMoreRef.current = res.hasMore
         loadingRef.current = false
+        // 定位页的最后一项作为后续向前翻页的 keyset 游标
+        if (order !== 'random' && res.items.length > 0) {
+          const it = res.items[res.items.length - 1]
+          const c = it.created_at ?? ''
+          cursorRef.current = (order === 'duration' || order === 'duration_asc')
+            ? `${Number(it.duration_ms ?? 0)}|${c}|${it.id}`
+            : (order === 'heat' || order === 'heat_asc')
+              ? `${Number(it.heat_value ?? 0)}|${c}|${it.id}`
+              : `${c}|${it.id}`
+        } else {
+          cursorRef.current = null
+        }
         if (retryTimerRef.current) {
           window.clearTimeout(retryTimerRef.current)
           retryTimerRef.current = null
@@ -548,9 +589,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           initialLoadedRef.current = true
           fetchedKeysRef.current.clear()
           filterKeyRef.current = filterSig
-          setToastMsg('该文件不在当前筛选结果中')
-          setToastVisible(true)
-          setTimeout(() => setToastVisible(false), 3000)
+          showToast('该文件不在当前筛选结果中')
         }
         locateProcessingRef.current = false
         locateFileIdRef.current = null
@@ -623,6 +662,12 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         return chosen
       }
       try {
+        const buildCursorFor = (it: MediaItem): string => {
+          const c = it.created_at ?? ''
+          if (order === 'duration' || order === 'duration_asc') return `${Number(it.duration_ms ?? 0)}|${c}|${it.id}`
+          if (order === 'heat' || order === 'heat_asc') return `${Number(it.heat_value ?? 0)}|${c}|${it.id}`
+          return `${c}|${it.id}`
+        }
         const res = await fetchMedia({
           model_ids: modelIds,
           tag_ids: tagIds,
@@ -633,14 +678,16 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           min_heat: minHeat,
           max_heat: maxHeat,
           order,
-          seed,
+          seed: order === 'random' ? seed : undefined,
           name: nameSearch,
           edit_mode: selectMode,
           true_random: order === 'random' && randomMode === 'true_random',
+          cursor: (page > 1 && order !== 'random' && cursorRef.current) ? cursorRef.current : undefined,
         }, controller.signal)
         if (filterKeyRef.current !== filterSig) return
         fetchedKeysRef.current.add(key)
         retryCountsRef.current.delete(key)
+        res.items.forEach(it => pageOfRef.current.set(it.id, page))
         const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || minHeat !== undefined || maxHeat !== undefined
         setItems(prev => {
           const seen = new Set(prev.map(i => i.id))
@@ -651,6 +698,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
               seen.add(it.id)
               merged.push(it)
             }
+          }
+          // 记录最后一项的排序键作为下一翻页的 keyset 游标
+          if (order !== 'random' && merged.length > 0) {
+            cursorRef.current = buildCursorFor(merged[merged.length - 1])
           }
           return merged
         })
@@ -686,6 +737,39 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     }
   }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch, refreshKey, selectMode, requestRetryTick])
 
+  // ── 长翻页窗口裁剪 ─────────────────────────────────────────
+  // 只保留最近 MAX_ITEMS 条：从头部丢弃旧页，控制 DOM 数量与内存。
+  // 已选中的 selectedIds 独立于 items 保存，不受裁剪影响；
+  // 被裁掉的旧页可通过顶部「加载上一页」按钮按页码重新拉取。
+  useEffect(() => {
+    if (items.length <= MAX_ITEMS) return
+    // 灯箱打开 / 定位处理中 / 页面在顶部附近时不裁剪，避免打断当前操作
+    if (selectedIndex !== null) return
+    if (locateProcessingRef.current || locateFileIdRef.current) return
+    if (window.scrollY < window.innerHeight * 2) return
+    const cut = items.length - MAX_ITEMS
+    const kept = items.slice(cut)
+    for (let i = 0; i < cut; i++) pageOfRef.current.delete(items[i].id)
+    const firstKept = kept[0]
+    if (firstKept) {
+      const p = pageOfRef.current.get(firstKept.id) ?? earliestPageRef.current
+      earliestPageRef.current = Math.max(1, p)
+    }
+    // 清理被裁分页的取数/重试记录，避免 Set/Map 无限增长
+    const minPage = earliestPageRef.current
+    for (const k of Array.from(fetchedKeysRef.current)) {
+      const p = Number(k.split('|')[0])
+      if (Number.isFinite(p) && p < minPage) fetchedKeysRef.current.delete(k)
+    }
+    for (const k of Array.from(retryCountsRef.current.keys())) {
+      const p = Number(k.split('|')[0])
+      if (Number.isFinite(p) && p < minPage) retryCountsRef.current.delete(k)
+    }
+    prefetchedRef.current.clear()
+    setShowPrevPageBtn(minPage > 1)
+    setItems(kept)
+  }, [items, selectedIndex])
+
   useEffect(() => {
     if (manualLoadMore) return
     const el = sentinel.current
@@ -705,16 +789,12 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     if (selectedIndex === null) return
     const set = prefetchedRef.current
     const ids = [selectedIndex - 1, selectedIndex + 1]
-    const isVideo = (ft?: string | null) => {
-      const s = (ft || '').toLowerCase()
-      return ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(s)
-    }
     ids.forEach(idx => {
       if (idx < 0 || idx >= items.length) return
       const it = items[idx]
       const key = it.file_path || ''
       if (!key || set.has(key)) return
-      if (!isVideo(it.file_type)) return
+      if (!isVideoFile(it.file_type)) return
       set.add(key)
       try {
         ;(async () => {
@@ -783,7 +863,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       <div
         className={`masonry${dragSelecting ? ' selecting' : ''}`}
         ref={gridRef}
-        style={{ ['--col-w' as any]: `${colWidth}px` }}
+        style={{ '--col-w': `${colWidth}px` } as React.CSSProperties}
         onMouseDown={onMasonryMouseDown}
         onClickCapture={(e) => {
           if (blockClickRef.current) {
@@ -793,28 +873,22 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         }}
       >
         {items.length > 0 && columns.map((col, ci) => (
-          <div className="col" key={`col-${ci}`} style={{ ['--col-index' as any]: ci }}>
+          <div className="col" key={`col-${ci}`} style={{ '--col-index': ci } as React.CSSProperties}>
             {col.map(({ item, idx }, ri) => (
-              <div key={item.id} data-media-id={item.id} style={{ ['--row-index' as any]: ri }}>
+              <div key={item.id} data-media-id={item.id} style={{ '--row-index': ri } as React.CSSProperties}>
               <MediaCard
                 key={item.id}
                 item={item}
-                onOpen={() => setSelectedIndex(idx)}
-                onLocate={onLocateRequest ? () => onLocateRequest(item.id) : undefined}
+                index={idx}
+                onOpen={handleOpen}
+                onLocate={handleLocate}
                 highlighted={highlightId === item.id}
-                onOpenSystem={() => openInSystem(item.file_path || '')}
+                onOpenSystem={handleOpenSystem}
                 onTagClick={onTagClick}
                 onModelClick={onModelClick}
                 selectable={selectMode}
                 selected={selectedIds.has(item.id)}
-                dragging={dragSelecting}
-                onSelectToggle={() => {
-                  setSelectedIds(prev => {
-                    const s = new Set(prev)
-                    if (s.has(item.id)) s.delete(item.id); else s.add(item.id)
-                    return s
-                  })
-                }}
+                onSelectToggle={handleSelectToggle}
               />
               </div>
             ))}
@@ -889,31 +963,10 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           if (selectedIndex === null) return null
           const it = items[selectedIndex]
           if (!it) return null
-          const isVideo = it.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(it.file_type.toLowerCase())
+          const isVideo = isVideoFile(it.file_type)
           const wh = isVideo ? `${(vMeta?.w ?? it.video_width) ?? ''}×${(vMeta?.h ?? it.video_height) ?? ''}` : `${it.image_width ?? ''}×${it.image_height ?? ''}`
-          const fmtSize = (bytes?: number | null): string | null => {
-            if (!bytes || bytes <= 0) return null
-            const kb = bytes / 1024
-            const mb = kb / 1024
-            const gb = mb / 1024
-            if (gb >= 1) return `${gb.toFixed(2)}G`
-            if (mb >= 1) return `${mb.toFixed(2)}M`
-            const k = Number(kb.toFixed(2))
-            return `${(k <= 0 ? 0.01 : k).toFixed(2)}k`
-          }
-          const fmtDurZh = (ms?: number | null): string | null => {
-            if (!ms || ms <= 0) return null
-            const total = Math.round(ms / 1000)
-            const h = Math.floor(total / 3600)
-            const m = Math.floor((total % 3600) / 60)
-            const s = total % 60
-            const pad = (n: number) => String(n).padStart(2, '0')
-            if (h > 0) return `${h}时${pad(m)}分${pad(s)}秒`
-            return `${m}分${pad(s)}秒`
-          }
-          const size = fmtSize(it.file_size)
-          const sizeResolved = fmtSize((vSize ?? it.file_size) ?? null)
-          const durZh = fmtDurZh((vMeta?.d ? vMeta.d * 1000 : it.duration_ms) ?? null)
+          const sizeResolved = formatFileSize((vSize ?? it.file_size) ?? null)
+          const durZh = formatDurationZh((vMeta?.d ? vMeta.d * 1000 : it.duration_ms) ?? null)
           const fmt = (s?: string | null): string | null => {
             if (!s) return null
             const d = new Date(s)
@@ -944,11 +997,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           const it = items[selectedIndex]
           if (!it) return null
           const onOpenInSystem = () => { void openInSystem(it.file_path || '') }
-          const displayTitle = (() => {
-            const t = it.title || ''
-            const m = t.match(/^(.*?)(\.(jpg|jpeg|png|gif|webp|bmp|tiff|svg|mp4|avi|mov|mkv|webm|mpeg|mpg|m4v|mp3|m4a))$/i)
-            return m ? m[1] : t
-          })()
+          const displayTitle = stripMediaExtension(it.title || '')
           return (
             <div className="lightbox-meta lightbox-right">
               <div className="lightbox-title">{displayTitle}</div>
@@ -994,7 +1043,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         {selectedIndex !== null && items[selectedIndex] && (
           (() => {
             const it = items[selectedIndex]
-            const isVideo = it.file_type && ['mp4','avi','mov','mkv','webm','mpeg','mpg','m4v','mp3','m4a'].includes(it.file_type.toLowerCase())
+            const isVideo = isVideoFile(it.file_type)
             const src = it.file_path || ''
             const onMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
               const el = e.currentTarget
@@ -1006,7 +1055,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
             return isVideo ? (
               <VideoPlayer src={src} onLoadedMetadata={onMeta} autoplay initialVolume={0.08} />
             ) : (
-              <img src={it.file_path} className="lightbox-img" />
+              <img src={it.file_path} className="lightbox-img" alt={it.title} />
             )
           })()
         )}
