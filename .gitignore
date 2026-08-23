@@ -153,8 +153,8 @@ frontend/dist/
 .superpowers/
 docs/superpowers/
 
-# Claude Code local config
-.claude/settings.local.json
+# Local agent config
+.claude/
 .agents/
 
 # Temp files
