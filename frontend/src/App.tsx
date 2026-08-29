@@ -5,6 +5,7 @@ import MediaGrid from './components/MediaGrid'
 import ParticleWhale from './components/ParticleWhale'
 import DigitileWhale from './components/DigitileWhale'
 import WhaleMark from './components/WhaleMark'
+import type { MediaKind } from './types'
 import { loadCardWidth, saveCardWidth } from './utils/cardWidth'
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
   const [order, setOrder] = useState<'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc'>('random')
   const [randomMode, setRandomMode] = useState<'random' | 'true_random'>('random')
   const [nameSearch, setNameSearch] = useState<string>('')
+  const [mediaKind, setMediaKind] = useState<MediaKind | 'all'>('all')
   const [locked, setLocked] = useState<boolean>(true)
   const [code, setCode] = useState<string>('')
   const [error, setError] = useState<string>('')
@@ -256,6 +258,7 @@ export default function App() {
               editMode={editMode}
               randomMode={randomMode}
               nameSearch={nameSearch}
+              mediaKind={mediaKind}
               onRandomizeSeed={() => setSeed(Date.now() + Math.floor(Math.random()*1e9))}
               onRandomModeChange={(mode) => setRandomMode(mode)}
               onChange={(m, t, ex, s) => {
@@ -270,6 +273,7 @@ export default function App() {
               }}
               onOrderChange={(o) => setOrder(o)}
               onNameSearchChange={(q) => setNameSearch(q)}
+              onMediaKindChange={(k) => setMediaKind(k)}
               trueRandomCacheEnabled={trueRandomCacheEnabled}
               trueRandomCacheCount={trueRandomCacheCount}
               settingsBusy={settingsBusy}
@@ -293,6 +297,7 @@ export default function App() {
               randomMode={randomMode}
               trueRandomCacheEnabled={trueRandomCacheEnabled}
               nameSearch={nameSearch}
+              mediaKind={mediaKind}
               seed={seed}
               cardWidthTarget={cardWidth}
               locateRequest={locateRequest}

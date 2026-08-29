@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, bulkBlacklist, fetchTags, openInSystem } from '../api'
-import type { MediaItem } from '../types'
+import { fetchMedia, fetchFilePosition, bulkAddTags, bulkRemoveTags, bulkUpdateHeat, bulkBlacklist, bulkSetMediaKind, fetchTags, openInSystem } from '../api'
+import type { MediaItem, MediaKind } from '../types'
 import MediaCard from './MediaCard'
 import Lightbox from './Lightbox'
 import VideoPlayer from './VideoPlayer'
 import TagPicker from './TagPicker'
+import TypePicker from './TypePicker'
 import BulkBar from './BulkBar'
 import { scrollWindowToTop } from '../utils/scrollToTop'
-import { formatDurationZh, formatFileSize, isVideoFile, stripMediaExtension } from '../utils/format'
+import { MEDIA_KIND_LABELS, formatDurationZh, formatFileSize, isVideoFile, mediaKindOf, stripMediaExtension } from '../utils/format'
 
 type Props = {
   modelIds: string[]
@@ -21,6 +22,7 @@ type Props = {
   trueRandomCacheEnabled: boolean
   seed: number
   nameSearch?: string
+  mediaKind: MediaKind | 'all'
   cardWidthTarget?: number
   locateRequest?: { fileId: string } | null
   onLocateRequest?: (fileId: string) => void
@@ -29,7 +31,7 @@ type Props = {
   onModelClick?: (id: string) => void
 }
 
-export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', cardWidthTarget = 300, locateRequest, onLocateRequest, onLocateRequestClear, onTagClick, onModelClick }: Props) {
+export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch = '', mediaKind, cardWidthTarget = 300, locateRequest, onLocateRequest, onLocateRequestClear, onTagClick, onModelClick }: Props) {
   const PAGE_SIZE = 60
   const [items, setItems] = useState<MediaItem[]>([])
   const [page, setPage] = useState(1)
@@ -60,6 +62,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   const [selectMode, setSelectMode] = useState<boolean>(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [pickerOpen, setPickerOpen] = useState<{ type:'add'|'remove'|null }>({ type: null })
+  const [typePickerOpen, setTypePickerOpen] = useState(false)
   const [tagMeta, setTagMeta] = useState<Map<string, { name: string; category_name?: string | null }>>(new Map())
   const [refreshKey, setRefreshKey] = useState(0)
   const [heatBusy, setHeatBusy] = useState<boolean>(false)
@@ -180,7 +183,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     const prevPage = earliestPageRef.current - 1
     if (prevPage < 1 || loadingRef.current) return
     const sName = nameSearch.trim().toLowerCase()
-    const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+    const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${mediaKind}|${sName}|${refreshKey}`
     setLoading(true)
     loadingRef.current = true
     try {
@@ -196,6 +199,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         order,
         seed: order === 'random' ? seed : undefined,
         name: nameSearch,
+        media_kind: mediaKind,
         edit_mode: selectMode,
         true_random: order === 'random' && randomMode === 'true_random',
       })
@@ -233,6 +237,19 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       setHeatBusy(false)
     }
   }
+  const applyBulkMediaKind = async (kind: MediaKind) => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    try {
+      const r = await bulkSetMediaKind(ids, kind)
+      setItems(prev => prev.map(it => selectedIds.has(it.id) ? { ...it, media_kind: kind } : it))
+      setTypePickerOpen(false)
+      showToast(`已将 ${r.updated} 个文件设置为${MEDIA_KIND_LABELS[kind]}`)
+    } catch {
+      showToast('批量设置类型失败')
+    }
+  }
+
   const applyBulkBlacklist = async () => {
     const ids = [...selectedIds]
     if (ids.length === 0) return
@@ -254,7 +271,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   // 筛选条件或排序方式变化时，清空编辑模式下已选中的卡片
   useEffect(() => {
     setSelectedIds(new Set())
-  }, [modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch])
+  }, [modelIds, tagIds, excludeTagIds, strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch, mediaKind])
   useEffect(() => {
     if (!selectMode) return
     const onKey = (e: KeyboardEvent) => {
@@ -473,16 +490,16 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     if (locateRequest) {
       // 定位进行中 — 由 locate effect 管理页码跳转，此处只更新 filterKey
       const sName = nameSearch.trim().toLowerCase()
-      filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+      filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${mediaKind}|${sName}|${refreshKey}`
       return
     }
     resetToFirstPage(true)
     setReloadHint(true)
     const sName = nameSearch.trim().toLowerCase()
-    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+    filterKeyRef.current = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${mediaKind}|${sName}|${refreshKey}`
     const t = setTimeout(() => setReloadHint(false), 1200)
     return () => clearTimeout(t)
-  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, nameSearch, seed, refreshKey])
+  }, [modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, nameSearch, mediaKind, seed, refreshKey])
 
   // 定位请求 effect — 加载目标页，前后页按需加载
   useEffect(() => {
@@ -492,7 +509,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
     locateFileIdRef.current = fileId
     locateProcessingRef.current = true
     const sName = nameSearch.trim().toLowerCase()
-    const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${sName}|${refreshKey}`
+    const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${mediaKind}|${sName}|${refreshKey}`
     ;(async () => {
       try {
         const pos = await fetchFilePosition(fileId, {
@@ -504,6 +521,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           min_heat: minHeat,
           max_heat: maxHeat,
           name: nameSearch,
+          media_kind: mediaKind,
           page_size: PAGE_SIZE,
         })
         if (locateFileIdRef.current !== fileId) return
@@ -528,6 +546,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           order,
           seed: order === 'random' ? seed : undefined,
           name: nameSearch,
+          media_kind: mediaKind,
           edit_mode: selectMode,
           true_random: order === 'random' && randomMode === 'true_random',
         })
@@ -621,7 +640,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
   useEffect(() => {
     const run = async () => {
       if (!hasMoreRef.current || loadingRef.current || locateProcessingRef.current) return
-      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
+      const filterSig = `${modelIds.join(',')}|${tagIds.join(',')}|${excludeTagIds.join(',')}|${strict}|${minHeat ?? ''}|${maxHeat ?? ''}|${order}|${randomMode}|${trueRandomCacheEnabled}|${seed}|${mediaKind}|${nameSearch.trim().toLowerCase()}|${refreshKey}`
       const key = `${page}|${filterSig}`
       if (fetchedKeysRef.current.has(key)) return
       const controller = new AbortController()
@@ -680,6 +699,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           order,
           seed: order === 'random' ? seed : undefined,
           name: nameSearch,
+          media_kind: mediaKind,
           edit_mode: selectMode,
           true_random: order === 'random' && randomMode === 'true_random',
           cursor: (page > 1 && order !== 'random' && cursorRef.current) ? cursorRef.current : undefined,
@@ -688,7 +708,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         fetchedKeysRef.current.add(key)
         retryCountsRef.current.delete(key)
         res.items.forEach(it => pageOfRef.current.set(it.id, page))
-        const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || minHeat !== undefined || maxHeat !== undefined
+        const hasFilters = modelIds.length > 0 || tagIds.length > 0 || excludeTagIds.length > 0 || nameSearch.trim() !== '' || mediaKind !== 'all' || minHeat !== undefined || maxHeat !== undefined
         setItems(prev => {
           const seen = new Set(prev.map(i => i.id))
           const merged = [...prev]
@@ -735,7 +755,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         retryTimerRef.current = null
       }
     }
-  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch, refreshKey, selectMode, requestRetryTick])
+  }, [page, modelIds.join(','), tagIds.join(','), excludeTagIds.join(','), strict, minHeat, maxHeat, order, randomMode, trueRandomCacheEnabled, seed, nameSearch, mediaKind, refreshKey, selectMode, requestRetryTick])
 
   // ── 长翻页窗口裁剪 ─────────────────────────────────────────
   // 只保留最近 MAX_ITEMS 条：从头部丢弃旧页，控制 DOM 数量与内存。
@@ -794,7 +814,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
       const it = items[idx]
       const key = it.file_path || ''
       if (!key || set.has(key)) return
-      if (!isVideoFile(it.file_type)) return
+      if (!isVideoFile(it.file_type, it.media_kind)) return
       set.add(key)
       try {
         ;(async () => {
@@ -813,6 +833,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           selectedCount={selectedIds.size}
           onAddTags={() => setPickerOpen({ type:'add' })}
           onRemoveTags={() => setPickerOpen({ type:'remove' })}
+          onSetType={() => setTypePickerOpen(true)}
           onIncreaseHeat={() => { void applyBulkHeat(1) }}
           onDecreaseHeat={() => { void applyBulkHeat(-1) }}
           onBlacklist={() => { void applyBulkBlacklist() }}
@@ -963,7 +984,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           if (selectedIndex === null) return null
           const it = items[selectedIndex]
           if (!it) return null
-          const isVideo = isVideoFile(it.file_type)
+          const isVideo = isVideoFile(it.file_type, it.media_kind)
           const wh = isVideo ? `${(vMeta?.w ?? it.video_width) ?? ''}×${(vMeta?.h ?? it.video_height) ?? ''}` : `${it.image_width ?? ''}×${it.image_height ?? ''}`
           const sizeResolved = formatFileSize((vSize ?? it.file_size) ?? null)
           const durZh = formatDurationZh((vMeta?.d ? vMeta.d * 1000 : it.duration_ms) ?? null)
@@ -982,7 +1003,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           return (
             <div className="lightbox-meta lightbox-left">
               <div className="lightbox-title">详情</div>
-              <div className="lightbox-row"><span className="muted">类型：</span><span className="pill">{it.file_type || '未知'}</span></div>
+              <div className="lightbox-row"><span className="muted">类型：</span><span className="pill">{MEDIA_KIND_LABELS[mediaKindOf(it.file_type, it.media_kind)]} · {it.file_type || '未知'}</span></div>
               <div className="lightbox-row"><span className="muted">尺寸：</span><span className="pill">{wh}</span></div>
               {sizeResolved && <div className="lightbox-row"><span className="muted">大小：</span><span className="pill">{sizeResolved}</span></div>}
               {isVideo && durZh && <div className="lightbox-row"><span className="muted">时长：</span><span className="pill">{durZh}</span></div>}
@@ -1043,7 +1064,7 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
         {selectedIndex !== null && items[selectedIndex] && (
           (() => {
             const it = items[selectedIndex]
-            const isVideo = isVideoFile(it.file_type)
+            const isVideo = isVideoFile(it.file_type, it.media_kind)
             const src = it.file_path || ''
             const onMeta = (e: React.SyntheticEvent<HTMLVideoElement>) => {
               const el = e.currentTarget
@@ -1060,6 +1081,11 @@ export default function MediaGrid({ modelIds, tagIds, excludeTagIds, strict, min
           })()
         )}
       </Lightbox>
+      <TypePicker
+        open={typePickerOpen}
+        onClose={() => setTypePickerOpen(false)}
+        onApply={(kind) => { void applyBulkMediaKind(kind) }}
+      />
       <TagPicker
         open={pickerOpen.type !== null}
         title={pickerOpen.type === 'add' ? '批量添加标签' : '批量移除标签'}

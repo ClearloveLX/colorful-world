@@ -20,6 +20,13 @@ from collections import OrderedDict
 
 from backend.data.database import Database, compute_md5, get_data_root, resolve_abs
 from backend.services.file_manager import FileManager
+from backend.services.media_detector import (
+    MEDIA_KIND_AUDIO,
+    MEDIA_KIND_IMAGE,
+    MEDIA_KIND_UNKNOWN,
+    MEDIA_KIND_VIDEO,
+    detect_media_file,
+)
 
 # 数据根目录统一解析（CW_DATA_ROOT → L:\data → 项目 data），来自 backend.data.database
 def _win_logical_cmp(a, b):
@@ -128,6 +135,15 @@ class ImageClassifierApp:
     AUDIO_EXTENSIONS = {'.mp3', '.m4a'}
     IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
 
+    def _create_blacklist_icon(self, size=18):
+        """生成一个简单的禁止图标，避免 Tk 对 emoji 字体上下不居中的问题。"""
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        # 白色圆环 + 白色斜杠，放在红色按钮上清晰且天然居中。
+        d.ellipse([2, 2, size - 3, size - 3], outline="#FFFFFF", width=2)
+        d.line([(size * 0.3, size * 0.7), (size * 0.7, size * 0.3)], fill="#FFFFFF", width=2)
+        return ImageTk.PhotoImage(img)
+
     def __init__(self, root):
         self.root = root
         self.root.title("图片分类管理界面")
@@ -142,6 +158,7 @@ class ImageClassifierApp:
         self.current_file_id = None
         self.current_image_index = -1
         self.image_files = []
+        self.image_display_names = []
 
         # 预加载缓存
         self._preloaded_photo = None
@@ -152,6 +169,9 @@ class ImageClassifierApp:
         
         # 自动下一张模式
         self.auto_next = tk.BooleanVar(value=True)
+
+        # 二筛模式：从数据库加载“待处理”标签文件，保存时只改标签不移动文件
+        self.secondary_mode = tk.BooleanVar(value=False)
 
         # 自动保存开关（默认关闭）
         self.auto_save_enabled = tk.BooleanVar(value=False)
@@ -570,6 +590,10 @@ class ImageClassifierApp:
         auto_check = ttk.Checkbutton(toolbar, text="自动下一张", variable=self.auto_next)
         auto_check.pack(side=tk.LEFT, padx=10)
 
+        # 二筛模式开关
+        secondary_check = ttk.Checkbutton(toolbar, text="二筛", variable=self.secondary_mode, command=self.on_secondary_mode_toggle)
+        secondary_check.pack(side=tk.LEFT, padx=10)
+
         # 源文件夹路径显示
         self.source_folder_label = ttk.Label(toolbar, text="未选择文件夹")
         self.source_folder_label.pack(side=tk.LEFT, padx=10)
@@ -742,7 +766,7 @@ class ImageClassifierApp:
         save_button_frame.pack(fill=tk.X, padx=10, pady=10)
         
         # 保存按钮 — 统一执行：保存标签→移动文件→自动下一张
-        save_image_button = tk.Button(
+        self.save_image_button = tk.Button(
             save_button_frame,
             text="💾 保存并归档 (S)",
             command=self.save_image,
@@ -753,7 +777,7 @@ class ImageClassifierApp:
             bd=3,
             cursor="hand2"
         )
-        save_image_button.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, ipady=5)
+        self.save_image_button.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, ipady=5)
 
         # 自动保存按钮
         self.auto_save_btn = tk.Button(
@@ -789,6 +813,24 @@ class ImageClassifierApp:
         
         ttk.Button(other_button_frame, text="上一张 (←)", command=self.load_previous).pack(side=tk.LEFT, padx=5)
         ttk.Button(other_button_frame, text="下一张 (→)", command=self.load_next).pack(side=tk.LEFT, padx=5)
+
+        # 二筛模式专用：把当前列表剩余文件全部拉黑
+        # 用 PIL 生成图片图标 + compound 组合，Tk 会可靠地把图片和文字垂直居中。
+        self._blacklist_all_icon_img = self._create_blacklist_icon()
+        self.blacklist_all_button = tk.Button(
+            other_button_frame,
+            image=self._blacklist_all_icon_img,
+            text=" 拉黑剩余全部",
+            compound="left",
+            command=self.blacklist_all_secondary,
+            bg="#F44336",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            relief=tk.RAISED,
+            bd=2,
+            cursor="hand2"
+        )
+        # 默认隐藏，仅二筛模式显示
         
         # 右侧：文件列表（窄栏）
         right_frame = ttk.Frame(main_frame)
@@ -842,6 +884,12 @@ class ImageClassifierApp:
     
     def select_source_folder(self):
         """选择源文件夹"""
+        if getattr(self, 'secondary_mode', None) and self.secondary_mode.get():
+            self.secondary_mode.set(False)
+            if hasattr(self, 'save_image_button'):
+                self.save_image_button.config(text="💾 保存并归档 (S)")
+            if hasattr(self, 'blacklist_all_button'):
+                self.blacklist_all_button.pack_forget()
         folder = filedialog.askdirectory(title="选择包含图片的文件夹")
         if folder:
             self.file_manager.set_source_folder(folder)
@@ -852,7 +900,10 @@ class ImageClassifierApp:
                 self.load_image_by_index(0)
     
     def scan_folder(self):
-        """扫描文件夹中的媒体文件"""
+        """扫描文件夹中的媒体文件（二筛模式下改为刷新“待处理”列表）"""
+        if getattr(self, 'secondary_mode', None) and self.secondary_mode.get():
+            self.load_secondary_list(auto_load=False)
+            return
         files = self.file_manager.get_image_files()
         filtered = [p for p in files if not self.is_video_path(p)]
         try:
@@ -860,10 +911,254 @@ class ImageClassifierApp:
         except Exception:
             self.image_files = sorted(filtered, key=lambda p: os.path.basename(p).lower())
         self.file_listbox.delete(0, tk.END)
-        for img_file in self.image_files:
-            self.file_listbox.insert(tk.END, os.path.basename(img_file))
+        self.image_display_names = [os.path.basename(p) for p in self.image_files]
+        for display_name in self.image_display_names:
+            self.file_listbox.insert(tk.END, display_name)
         self.status_label.config(text=f"共 {len(self.image_files)} 个文件")
         self.current_image_index = -1
+
+    def _find_tag_by_name(self, name):
+        """按名称查找标签，返回标签 dict，找不到返回 None。"""
+        try:
+            tags = self.db.get_tags_with_category_name()
+        except Exception:
+            return None
+        for tag in tags:
+            if tag.get('name') == name:
+                return tag
+        return None
+
+    def load_secondary_list(self, auto_load=True):
+        """二筛模式：加载数据库里标签为“待处理”的图片，最多500个，按文件名排序。"""
+        self.file_listbox.delete(0, tk.END)
+        tag = self._find_tag_by_name('待处理')
+        if not tag:
+            self.image_files = []
+            self.image_display_names = []
+            self.current_image_index = -1
+            self.current_image_path = None
+            self.current_file_id = None
+            self.image_canvas.delete("all")
+            self.info_label.config(text="")
+            self.source_folder_label.config(text="二筛: 待处理(未找到该标签)")
+            self.status_label.config(text="未找到标签“待处理”")
+            return
+        try:
+            rows = self.db.query_files_with_filters(
+                tag_ids=[tag['id']],
+                strict=False,
+                offset=0,
+                limit=500,
+                order='name',
+            )
+        except Exception as e:
+            self.image_files = []
+            self.image_display_names = []
+            self.current_image_index = -1
+            self.source_folder_label.config(text="二筛: 待处理(加载失败)")
+            self.status_label.config(text=f"加载二筛列表失败: {str(e)}")
+            return
+        files = []
+        display_names = []
+        for row in rows:
+            path = row.get('file_path')
+            if not path:
+                continue
+            path = resolve_abs(path)
+            if os.path.splitext(path)[1].lower() in self.IMAGE_EXTENSIONS:
+                files.append(path)
+                display_names.append(
+                    row.get('original_file_name') or row.get('file_name') or os.path.basename(path)
+                )
+        self.image_files = files
+        self.image_display_names = display_names
+        self.current_image_index = -1
+        if not files:
+            self.current_image_path = None
+            self.current_file_id = None
+            self.image_canvas.delete("all")
+            self.info_label.config(text="")
+        self.source_folder_label.config(text=f"二筛: 待处理 ({len(files)} 个)")
+        self.status_label.config(text=f"二筛待处理共 {len(files)} 个文件")
+        for display_name in self.image_display_names:
+            self.file_listbox.insert(tk.END, display_name)
+        if auto_load and self.image_files:
+            self.load_image_by_index(0)
+
+    def on_secondary_mode_toggle(self):
+        """工具栏“二筛”复选框切换：开=加载待处理列表，关=恢复源文件夹列表。"""
+        if hasattr(self, 'save_image_button'):
+            if self.secondary_mode.get():
+                self.save_image_button.config(text="💾 保存标签 (S)")
+            else:
+                self.save_image_button.config(text="💾 保存并归档 (S)")
+        if hasattr(self, 'blacklist_all_button'):
+            if self.secondary_mode.get():
+                self.blacklist_all_button.pack(side=tk.LEFT, padx=5)
+            else:
+                self.blacklist_all_button.pack_forget()
+        if self.secondary_mode.get():
+            self.load_secondary_list(auto_load=True)
+        else:
+            self.current_image_path = None
+            self.current_file_id = None
+            self.current_image_index = -1
+            self.image_canvas.delete("all")
+            self.info_label.config(text="")
+            source_folder = self.file_manager.get_source_folder()
+            if source_folder:
+                self.source_folder_label.config(text=f"源: {os.path.basename(source_folder)}")
+                self.scan_folder()
+                if self.image_files:
+                    self.load_image_by_index(0)
+            else:
+                self.image_files = []
+                self.image_display_names = []
+                self.file_listbox.delete(0, tk.END)
+                self.source_folder_label.config(text="未选择文件夹")
+                self.status_label.config(text="二筛已关闭")
+
+    def _refresh_secondary_and_load_next(self):
+        """二筛保存后：从当前列表移除已处理文件，加载下一张。"""
+        current_index = self.current_image_index
+        if 0 <= current_index < len(self.image_files):
+            self.image_files.pop(current_index)
+            if 0 <= current_index < len(self.image_display_names):
+                self.image_display_names.pop(current_index)
+            self.file_listbox.delete(current_index)
+            self.status_label.config(text=f"二筛待处理剩余 {len(self.image_files)} 个")
+            self.source_folder_label.config(text=f"二筛: 待处理 ({len(self.image_files)} 个)")
+        if not self.image_files:
+            if self.auto_save_enabled.get():
+                self._set_auto_save_enabled(False)
+                self.status_label.config(text="二筛待处理列表已空，已自动关闭自动保存")
+            else:
+                self.status_label.config(text="二筛待处理列表已空")
+            self.current_image_path = None
+            self.current_file_id = None
+            self.current_image_index = -1
+            self.image_canvas.delete("all")
+            self.info_label.config(text="")
+            return
+        next_index = current_index
+        if next_index >= len(self.image_files):
+            next_index = len(self.image_files) - 1
+        if next_index >= 0:
+            self.load_image_by_index(next_index)
+        else:
+            self.load_image_by_index(0)
+
+    def _save_secondary(self, silent=False):
+        """二筛模式保存：只修改数据库里的模特/标签关联，不计算MD5、不移动文件。"""
+        if self._saving:
+            if not silent:
+                messagebox.showinfo("提示", "正在保存中，请稍候")
+            return False
+        if not self.current_image_path:
+            if not silent:
+                messagebox.showwarning("警告", "请先选择一张图片")
+            return False
+        if not self.current_file_id:
+            if not silent:
+                messagebox.showerror("错误", "二筛模式保存需要文件已存在数据库中")
+            return False
+        if not hasattr(self, 'model_var') or not hasattr(self, 'tag_vars'):
+            if not silent:
+                messagebox.showwarning("警告", "请先选择标签和模特")
+            return False
+        selected_model_id = self.model_var.get()
+        if not selected_model_id:
+            if not silent:
+                messagebox.showwarning("警告", "请选择一个模特")
+            return False
+        selected_tag_ids = [tag_id for tag_id, var in self.tag_vars.items() if var.get()]
+
+        self._saving = True
+        try:
+            self.db.set_file_models(self.current_file_id, [selected_model_id])
+            self.db.set_file_tags(self.current_file_id, selected_tag_ids)
+            self.last_selected_model_id = selected_model_id
+            self.last_selected_tag_ids = selected_tag_ids
+            self.status_label.config(text=f"✓ 二筛标签已更新！文件ID: {self.current_file_id}")
+            if self.auto_next.get():
+                self.refresh_and_load_next()
+            return True
+        except Exception as e:
+            if not silent:
+                messagebox.showerror("错误", f"保存标签失败:\n{str(e)}")
+            self.status_label.config(text="保存标签失败")
+            return False
+        finally:
+            self._saving = False
+
+    def blacklist_all_secondary(self):
+        """二筛模式：把当前列表剩余文件全部加入黑名单（移动至 data/bad 并删除数据库记录），完成后自动重新加载500条二筛数据。"""
+        if not (getattr(self, 'secondary_mode', None) and self.secondary_mode.get()):
+            messagebox.showwarning("提示", "当前不是二筛模式", parent=self.root)
+            return
+        files = list(self.image_files)
+        names = list(self.image_display_names)
+        if not files:
+            messagebox.showinfo("提示", "当前二筛列表没有剩余文件", parent=self.root)
+            return
+        if not messagebox.askyesno(
+            "确认全部拉黑",
+            f"确定把当前二筛列表中的 {len(files)} 个文件全部加入黑名单吗？\n\n文件将移动到 data/bad 文件夹，并删除数据库记录。",
+            parent=self.root,
+        ):
+            return
+
+        bad_folder = os.path.join(get_data_root(), "bad")
+        os.makedirs(bad_folder, exist_ok=True)
+
+        success = 0
+        failed = []
+
+        for path, display in zip(files, names):
+            try:
+                file_id = None
+                try:
+                    record = self.db.get_file(path)
+                    if record:
+                        file_id = record['id']
+                except Exception:
+                    file_id = None
+
+                if not os.path.exists(path):
+                    raise FileNotFoundError("文件不存在")
+
+                if os.path.normcase(os.path.dirname(os.path.normpath(path))) == os.path.normcase(os.path.normpath(bad_folder)):
+                    pass
+                else:
+                    original_filename = os.path.basename(path)
+                    target_path = os.path.join(bad_folder, original_filename)
+                    if os.path.exists(target_path):
+                        name, ext = os.path.splitext(original_filename)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        target_path = os.path.join(bad_folder, f"{name}_{timestamp}{ext}")
+                    shutil.move(path, target_path)
+
+                if file_id:
+                    try:
+                        self.db.delete_file(file_id)
+                    except Exception as e:
+                        raise RuntimeError(f"删除数据库记录失败: {e}")
+
+                success += 1
+            except Exception as e:
+                failed.append(f"{display}: {e}")
+
+        # 拉黑完成后，默认重新加载下一批二筛数据（最多500条）
+        self.load_secondary_list(auto_load=True)
+
+        if failed:
+            messagebox.showwarning(
+                "部分失败",
+                f"成功拉黑 {success} 个，失败 {len(failed)} 个，已重新加载二筛数据：\n" + "\n".join(failed[:20]),
+                parent=self.root,
+            )
+        else:
+            messagebox.showinfo("完成", f"已全部拉黑，共 {success} 个文件，已重新加载二筛数据", parent=self.root)
 
     # ========== 批量导入 ==========
 
@@ -985,7 +1280,24 @@ class ImageClassifierApp:
 
         start_btn.config(command=on_start)
 
-    def _resolve_good_subfolder(self, model_id, ext_l):
+    def _media_kind_for_path(self, path, ext_l):
+        """保存/导入时自动识别媒体类型：优先文件内容，失败回退扩展名。"""
+        try:
+            info = detect_media_file(path)
+            kind = (info or {}).get('kind') or MEDIA_KIND_UNKNOWN
+        except Exception:
+            kind = MEDIA_KIND_UNKNOWN
+        if kind != MEDIA_KIND_UNKNOWN:
+            return kind
+        if ext_l in self.IMAGE_EXTENSIONS:
+            return MEDIA_KIND_IMAGE
+        if ext_l in self.VIDEO_EXTENSIONS:
+            return MEDIA_KIND_VIDEO
+        if ext_l in self.AUDIO_EXTENSIONS:
+            return MEDIA_KIND_AUDIO
+        return MEDIA_KIND_UNKNOWN
+
+    def _resolve_good_subfolder(self, model_id, ext_l, media_kind=None):
         """与单文件保存一致的目录规则：data/good/<模特ID>/<3位序号>/。
 
         图片：每个子文件夹最多 1000 个文件（计数含图片与视频，与图片保存流程一致）；
@@ -994,7 +1306,8 @@ class ImageClassifierApp:
         """
         base_folder = os.path.join(get_data_root(), 'good', str(model_id))
         os.makedirs(base_folder, exist_ok=True)
-        if ext_l in self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS:
+        is_av = (media_kind in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO)) or (media_kind is None and ext_l in self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS)
+        if is_av:
             limit = 500
             def count_in(folder):
                 return sum(1 for f in os.listdir(folder)
@@ -1075,14 +1388,16 @@ class ImageClassifierApp:
                 _, ext = os.path.splitext(src)
                 ext_l = ext.lower()
                 file_size = os.path.getsize(src) if os.path.exists(src) else None
-                file_id = self.db.add_file(src, file_name=os.path.basename(src), file_size=file_size, md5_value=md5)
+                # 保存时自动识别类型：优先按文件内容，识别失败再按扩展名
+                media_kind = self._media_kind_for_path(src, ext_l)
+                file_id = self.db.add_file(src, file_name=os.path.basename(src), file_size=file_size, md5_value=md5, media_kind=media_kind)
                 if not file_id:
                     errors += 1
                     last_err = f"入库失败: {os.path.basename(src)}"
                     tick(i)
                     continue
                 # 与单文件保存一致：入库到 data/good/<模特ID>/<001|002|…>/<id><ext>
-                target_folder = self._resolve_good_subfolder(model_id, ext_l)
+                target_folder = self._resolve_good_subfolder(model_id, ext_l, media_kind=media_kind)
                 new_name = f"{file_id}{ext_l}"
                 new_path = os.path.join(target_folder, new_name)
                 if os.path.exists(new_path):
@@ -1093,8 +1408,16 @@ class ImageClassifierApp:
                     shutil.move(src, new_path)
                 else:
                     shutil.copy2(src, new_path)
-                self.db.update_file(file_id, file_path=new_path, file_name=new_name, file_size=os.path.getsize(new_path))
-                if ext_l in self.IMAGE_EXTENSIONS:
+                self.db.update_file(file_id, file_path=new_path, file_name=new_name, file_size=os.path.getsize(new_path), media_kind=media_kind)
+                if media_kind == MEDIA_KIND_IMAGE:
+                    self.db.save_image_data(file_id, new_path, md5_value=md5)
+                elif media_kind in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
+                    self.db.save_video_data(file_id, new_path)
+                    if media_kind == MEDIA_KIND_VIDEO:
+                        thumb = os.path.join(target_folder, f"{file_id}_thumb.jpg")
+                        if self._extract_first_frame_thumb(new_path, thumb):
+                            self.db.update_file_thumbnail(file_id, thumb)
+                elif ext_l in self.IMAGE_EXTENSIONS:
                     self.db.save_image_data(file_id, new_path, md5_value=md5)
                 elif ext_l in self.VIDEO_EXTENSIONS | self.AUDIO_EXTENSIONS:
                     self.db.save_video_data(file_id, new_path)
@@ -1155,6 +1478,9 @@ class ImageClassifierApp:
 
     def refresh_and_load_next(self):
         """刷新待处理列表并自动加载下一张图片"""
+        if getattr(self, 'secondary_mode', None) and self.secondary_mode.get():
+            self._refresh_secondary_and_load_next()
+            return
         # 保存当前索引
         current_index = self.current_image_index
         
@@ -2559,14 +2885,17 @@ class ImageClassifierApp:
                 messagebox.showwarning("警告", "请选择一个模特")
                 return
             vid_path = displayed_videos[sel[0]]
-            if not thumbs_images:
-                try:
-                    _, ext = os.path.splitext(vid_path)
-                except Exception:
-                    ext = ""
-                if ext.lower() not in {'.mp3', '.m4a'}:
-                    messagebox.showwarning("警告", "请先生成并选择缩略图")
-                    return
+            _, ext = os.path.splitext(vid_path)
+            ext_l = ext.lower()
+            media_kind = self._media_kind_for_path(vid_path, ext_l)
+            if media_kind == MEDIA_KIND_UNKNOWN:
+                if ext_l in self.AUDIO_EXTENSIONS:
+                    media_kind = MEDIA_KIND_AUDIO
+                elif ext_l in self.VIDEO_EXTENSIONS:
+                    media_kind = MEDIA_KIND_VIDEO
+            if not thumbs_images and media_kind != MEDIA_KIND_AUDIO:
+                messagebox.showwarning("警告", "请先生成并选择缩略图")
+                return
             model_id = selected_model.get()
             tag_ids = [tid for tid,var in tag_vars.items() if var.get()]
             # 主线程读取 Tk 变量（后台线程不得访问 Tk 解释器）
@@ -2584,7 +2913,7 @@ class ImageClassifierApp:
                     file_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else None
                     # 记录本次保存前该源文件是否已入库,异常兜底时只删本次新建的记录
                     pre_existing = bool(self.db.get_file(vid_path))
-                    file_id = self.db.add_file(vid_path, file_name=os.path.basename(vid_path), file_size=file_size)
+                    file_id = self.db.add_file(vid_path, file_name=os.path.basename(vid_path), file_size=file_size, media_kind=media_kind)
                     base_folder = os.path.join(get_data_root(),'good', str(model_id))
                     os.makedirs(base_folder, exist_ok=True)
                     subs = []
@@ -2617,7 +2946,7 @@ class ImageClassifierApp:
                         new_filename = f"{file_id}_{timestamp}{ext}"
                         new_path = os.path.join(target_folder, new_filename)
                     shutil.move(vid_path, new_path)
-                    if thumb_snapshot is not None:
+                    if thumb_snapshot is not None and media_kind == MEDIA_KIND_VIDEO:
                         full_img = thumb_snapshot
                         out_img = full_img.copy() if hasattr(full_img, 'copy') else full_img
                         if out_img is None:
@@ -2634,7 +2963,7 @@ class ImageClassifierApp:
                         except Exception:
                             out_img.save(thumb_path, format='JPEG', quality=90)
                         self.db.update_file_thumbnail(file_id, thumb_path)
-                    self.db.update_file(file_id, file_path=new_path, file_name=new_filename, file_size=os.path.getsize(new_path))
+                    self.db.update_file(file_id, file_path=new_path, file_name=new_filename, file_size=os.path.getsize(new_path), media_kind=media_kind)
                     try:
                         self.db.save_video_data(file_id, new_path)
                     except Exception:
@@ -2850,15 +3179,18 @@ class ImageClassifierApp:
         all_tags = self.db.get_tags_with_category_name(only_active=True)
         
         # 获取当前文件的分类（如果文件记录存在）
+        # 二筛模式：不再读取该文件原来的标签，直接用记忆的新标签；模特仍读取当前记录便于保持
+        secondary_mode = getattr(self, 'secondary_mode', None) and self.secondary_mode.get()
         current_model_id = None  # 改为单选，存储单个ID
         current_tag_ids = set()
         if self.current_file_id:
             current_models = self.db.get_file_models(self.current_file_id)
-            current_tags = self.db.get_file_tags(self.current_file_id)
+            if not secondary_mode:
+                current_tags = self.db.get_file_tags(self.current_file_id)
+                current_tag_ids = {t['id'] for t in current_tags}
             # 如果有模特，取第一个（单选）
             if current_models:
                 current_model_id = current_models[0]['id']
-            current_tag_ids = {t['id'] for t in current_tags}
         
         # 如果当前图片没有分类，使用上一次的选择
         if not current_model_id and self.last_selected_model_id:
@@ -2938,6 +3270,10 @@ class ImageClassifierApp:
                 messagebox.showwarning("警告", "请先选择一张图片")
             return False
 
+        # 二筛模式：只更新数据库标签/模特，不读取MD5、不移动文件
+        if getattr(self, 'secondary_mode', None) and self.secondary_mode.get():
+            return self._save_secondary(silent=silent)
+
         if not os.path.exists(self.current_image_path):
             if not silent:
                 messagebox.showerror("错误", "图片文件不存在")
@@ -2962,11 +3298,16 @@ class ImageClassifierApp:
 
         self._saving = True
         try:
+            # 保存时自动识别类型：优先文件内容，失败回退扩展名
+            _, _ext = os.path.splitext(self.current_image_path)
+            _ext_l = _ext.lower()
+            media_kind = self._media_kind_for_path(self.current_image_path, _ext_l)
+
             # 首次保存时计算一次MD5,同时传给 add_file 与 save_image_data,避免重复读取大文件
             md5_value = None
             if not self.current_file_id:
                 md5_value = compute_md5(self.current_image_path)
-                self.current_file_id = self.db.add_file(self.current_image_path, md5_value=md5_value)
+                self.current_file_id = self.db.add_file(self.current_image_path, md5_value=md5_value, media_kind=media_kind)
             
             # 获取第一个选中的模特ID（用于创建文件夹）
             model_id = selected_model_ids[0]
@@ -3019,16 +3360,21 @@ class ImageClassifierApp:
                 shutil.move(self.current_image_path, new_file_path)
                 
                 # 更新数据库中的文件路径和文件名
-                self.db.update_file(self.current_file_id, file_path=new_file_path, file_name=new_filename)
+                self.db.update_file(self.current_file_id, file_path=new_file_path, file_name=new_filename, media_kind=media_kind)
                 
                 # 更新当前图片路径
                 self.current_image_path = new_file_path
             else:
                 # 文件已经在目标位置，确保数据库中的文件名正确
-                self.db.update_file(self.current_file_id, file_name=new_filename)
+                self.db.update_file(self.current_file_id, file_name=new_filename, media_kind=media_kind)
             
-            # 计算并保存图片的MD5值到数据库（首次保存复用前面算好的MD5）
-            self.db.save_image_data(self.current_file_id, new_file_path, md5_value=md5_value)
+            # 根据自动识别的类型写元数据；未知时按原图片流程兜底
+            if media_kind == MEDIA_KIND_IMAGE:
+                self.db.save_image_data(self.current_file_id, new_file_path, md5_value=md5_value)
+            elif media_kind in (MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO):
+                self.db.save_video_data(self.current_file_id, new_file_path)
+            else:
+                self.db.save_image_data(self.current_file_id, new_file_path, md5_value=md5_value)
             
             # 保存关联关系（使用 set 方法避免重复）
             self.db.set_file_models(self.current_file_id, selected_model_ids)
@@ -3088,6 +3434,9 @@ class ImageClassifierApp:
 
     def _try_auto_save(self):
         """加载图片后尝试自动保存（如果开关开启且条件满足）"""
+        # 二筛模式要求手动逐个保存，不触发自动保存
+        if getattr(self, 'secondary_mode', None) and self.secondary_mode.get():
+            return
         if not self.auto_save_enabled.get():
             return
         if self._saving:
@@ -4750,6 +5099,81 @@ class ImageClassifierApp:
         ttk.Button(model_manage_frame, text="添加模特", command=add_model_to_tag).pack(fill=tk.X, padx=5, pady=5)
         ttk.Button(model_manage_frame, text="移除模特", command=remove_model_from_tag).pack(fill=tk.X, padx=5, pady=5)
     
+    def open_tag_edit_dialog(self, file_id, parent, title="更改文件标签", on_saved=None, show_next_button=False):
+        """打开单个文件的标签编辑对话框，逻辑与文件回显里的“更改标签”一致。
+
+        on_saved(file_id, selected_tag_ids, next_file) 在保存成功后回调；
+        show_next_button=True 时额外显示“保存并下一张”按钮（预留）。
+        """
+        try:
+            all_tags = self.db.get_tags_with_category_name()
+            current_tags = self.db.get_file_tags(file_id)
+        except Exception as e:
+            messagebox.showerror("错误", f"读取标签失败:\n{str(e)}", parent=parent)
+            return
+        current_tag_ids = {t['id'] for t in current_tags}
+
+        tag_dialog = tk.Toplevel(parent)
+        tag_dialog.title(title)
+        tag_dialog.geometry("600x720")
+        tag_dialog.transient(parent)
+        tag_dialog.grab_set()
+
+        tag_frame = ttk.LabelFrame(tag_dialog, text="选择标签（可多选）")
+        tag_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        tag_canvas, tag_scrollbar, tag_scrollable_frame = self._create_scrollable_frame(tag_frame)
+        tag_canvas.configure(height=560)
+        tag_canvas.bind("<MouseWheel>", lambda e: tag_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        tag_scrollable_frame.bind("<MouseWheel>", lambda e: tag_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        tag_canvas.pack(side="left", fill="both", expand=True)
+        tag_scrollbar.pack(side="right", fill="y")
+
+        tag_vars = {}
+        columns = 6
+        groups = {}
+        ordered_keys = []
+        for tag in all_tags:
+            key = tag.get('category_id') or 'UNCATEGORIZED'
+            if key not in groups:
+                groups[key] = {
+                    'name': tag.get('category_name') or '未分类',
+                    'tags': []
+                }
+                ordered_keys.append(key)
+            groups[key]['tags'].append(tag)
+        for key in ordered_keys:
+            group = groups[key]
+            section = ttk.LabelFrame(tag_scrollable_frame, text=group['name'])
+            section.pack(fill=tk.X, expand=False, padx=2, pady=2)
+            for c in range(columns):
+                section.grid_columnconfigure(c, weight=1)
+            for i, tag in enumerate(group['tags']):
+                var = tk.BooleanVar()
+                tag_vars[tag['id']] = var
+                if tag['id'] in current_tag_ids:
+                    var.set(True)
+                cb = ttk.Checkbutton(section, text=tag['name'], variable=var)
+                cb.grid(row=i // columns, column=i % columns, sticky="w", padx=2, pady=1)
+
+        def save_tag_changes(next_file=False):
+            selected_tag_ids = [tag_id for tag_id, var in tag_vars.items() if var.get()]
+            try:
+                self.db.set_file_tags(file_id, selected_tag_ids)
+                if on_saved is not None:
+                    on_saved(file_id, selected_tag_ids, bool(next_file))
+                tag_dialog.destroy()
+                messagebox.showinfo("成功", "标签已更新！", parent=parent)
+            except Exception as e:
+                messagebox.showerror("错误", f"更新标签失败:\n{str(e)}", parent=parent)
+
+        button_frame = ttk.Frame(tag_dialog)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(button_frame, text="确定", command=lambda: save_tag_changes(False)).pack(side=tk.LEFT, padx=5)
+        if show_next_button:
+            ttk.Button(button_frame, text="保存并下一张", command=lambda: save_tag_changes(True)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="取消", command=tag_dialog.destroy).pack(side=tk.LEFT, padx=5)
+
     def open_file_browser(self):
         """打开文件回显窗口"""
         # 如果已有对话框打开，聚焦到已打开的对话框
@@ -5478,7 +5902,7 @@ class ImageClassifierApp:
                 messagebox.showerror("错误", f"加入黑名单失败:\n{str(e)}")
         
         def change_file_tags():
-            """在文件回显页面更改文件的标签"""
+            """在文件回显页面更改文件的标签（复用统一标签编辑对话框）"""
             selection = file_listbox.curselection()
             if not selection or not displayed_files:
                 messagebox.showwarning("警告", "请先选择一个文件")
@@ -5489,83 +5913,16 @@ class ImageClassifierApp:
                 return
             
             file = displayed_files[idx]
-            file_id = file['id']
-            
-            # 获取所有标签和当前文件的标签
-            all_tags = self.db.get_tags_with_category_name()
-            current_tags = self.db.get_file_tags(file_id)
-            current_tag_ids = {t['id'] for t in current_tags}
-            
-            # 创建标签选择对话框
-            tag_dialog = tk.Toplevel(browser_window)
-            tag_dialog.title("更改文件标签")
-            tag_dialog.geometry("600x720")
-            tag_dialog.transient(browser_window)
-            tag_dialog.grab_set()
-            
-            # 使用复选框显示标签列表
-            tag_frame = ttk.LabelFrame(tag_dialog, text="选择标签（可多选）")
-            tag_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            
-            tag_canvas, tag_scrollbar, tag_scrollable_frame = self._create_scrollable_frame(tag_frame)
-            tag_canvas.configure(height=560)
-            tag_canvas.bind("<MouseWheel>", lambda e: tag_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
-            tag_scrollable_frame.bind("<MouseWheel>", lambda e: tag_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
-            tag_canvas.pack(side="left", fill="both", expand=True)
-            tag_scrollbar.pack(side="right", fill="y")
-            
-            tag_vars = {}
-            columns = 6
-            groups = {}
-            ordered_keys = []
-            for tag in all_tags:
-                key = tag.get('category_id') or 'UNCATEGORIZED'
-                if key not in groups:
-                    groups[key] = {
-                        'name': tag.get('category_name') or '未分类',
-                        'tags': []
-                    }
-                    ordered_keys.append(key)
-                groups[key]['tags'].append(tag)
-            for key in ordered_keys:
-                group = groups[key]
-                section = ttk.LabelFrame(tag_scrollable_frame, text=group['name'])
-                section.pack(fill=tk.X, expand=False, padx=2, pady=2)
-                for c in range(columns):
-                    section.grid_columnconfigure(c, weight=1)
-                for i, tag in enumerate(group['tags']):
-                    var = tk.BooleanVar()
-                    tag_vars[tag['id']] = var
-                    if tag['id'] in current_tag_ids:
-                        var.set(True)
-                    cb = ttk.Checkbutton(section, text=tag['name'], variable=var)
-                    cb.grid(row=i // columns, column=i % columns, sticky="w", padx=2, pady=1)
-            
-            def save_tag_changes():
-                """保存标签更改"""
-                # 获取选中的标签ID
-                selected_tag_ids = [tag_id for tag_id, var in tag_vars.items() if var.get()]
-                
-                try:
-                    # 更新文件的标签关联
-                    self.db.set_file_tags(file_id, selected_tag_ids)
-                    
-                    # 刷新文件信息显示
-                    on_file_select()
-                    
-                    # 关闭对话框
-                    tag_dialog.destroy()
-                    
-                    messagebox.showinfo("成功", "标签已更新！")
-                except Exception as e:
-                    messagebox.showerror("错误", f"更新标签失败:\n{str(e)}")
-            
-            # 按钮区域
-            button_frame = ttk.Frame(tag_dialog)
-            button_frame.pack(fill=tk.X, padx=10, pady=10)
-            ttk.Button(button_frame, text="确定", command=save_tag_changes).pack(side=tk.LEFT, padx=5)
-            ttk.Button(button_frame, text="取消", command=tag_dialog.destroy).pack(side=tk.LEFT, padx=5)
+            def on_saved(file_id, tag_ids, next_file):
+                on_file_select()
+
+            self.open_tag_edit_dialog(
+                file['id'],
+                browser_window,
+                title="更改文件标签",
+                on_saved=on_saved
+            )
 
         def change_file_thumbnail():
             selection = file_listbox.curselection()

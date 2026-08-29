@@ -73,6 +73,8 @@ This is a **local media gallery** for browsing, filtering, and managing images/v
   - Entry point: `frontend/src/main.tsx` → `App.tsx`
   - Types: `frontend/src/types.ts` defines `Model`, `Tag`, `MediaItem`, `ID`
   - API layer: `frontend/src/api.ts` — `getRetry()` retries 3x with 400ms delay; `get()` uses 15s AbortController timeout; `fetchMedia()` has custom retry (not `getRetry`, uses its own 600ms delay retry in `MediaGrid`)
+
+  - **Media type auto-detection** (`backend/services/media_detector.py`): content-signature-first (magic bytes) + extension fallback for image/video/audio. `main.py` save/import paths and `Database.add_file()` use it to record `media_kind`; the web grid can filter by this stored type.
 - **Data root**: Controlled by `CW_DATA_ROOT` env var. Defaults to `L:\data` if that drive exists, otherwise `./data`. File paths served via base64-encoded query params (`/api/file?path=...`) to support files on any drive.
 - **Vite dev config** (`frontend/vite.config.ts`): `strictPort: true` on 4398, proxies `/api` → `localhost:4396`.
 
@@ -87,7 +89,7 @@ This is a **local media gallery** for browsing, filtering, and managing images/v
 
 ### Database (SQLite — `data/image_classifier.db`)
 Single `Database` class in `backend/data/database.py` (~2400 lines). Core tables:
-- **files** — media records with path, dimensions, duration, thumbnail, MD5, heat_value
+- **files** — media records with path, dimensions, duration, thumbnail, MD5, heat_value, `media_kind` (image/video/audio/unknown, auto-detected)
 - **models** — people/models with preview images, grouped by `model_types`
 - **tags** — labels, grouped by `tag_categories`, with sort_order
 - Join tables: `file_models` (N:N), `file_tags` (N:N), `model_tags` (N:N)
@@ -107,6 +109,7 @@ IDs are UUIDs (hex, no dashes). The database auto-migrates on every startup (`in
 - `tests/test_true_random_cache.py` — cache blacklisting behavior via FastAPI `TestClient` with temp DB injection (`server.db = self.db`)
 - `tests/test_tag_file_counts.py` — incremental tag/model file-count maintenance + recalc semantics
 - `tests/test_md5_reuse.py` — `compute_md5()` chunked hashing + precomputed-MD5 fast paths in `add_file`/`save_image_data`
+- `tests/test_media_detector.py` — magic-byte/extension media detection and `media_kind` DB storage/filter
 - `tests/test_open_video_external.py` — `open_file_externally()` fallback chain (ShellExecuteW → startfile → rundll32 → explorer)
 - `tests/test_video_preview_helpers.py` — Tkinter GUI video preview helpers (LRU cache, image resize)
 - `tests/test_video_toolbar_layout.py` — Tkinter toolbar row placement
@@ -173,7 +176,7 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 ### Key API Endpoints (all under `/api/`)
 
 **Media query:**
-- `GET /api/media` — filtered, paginated media with model_ids, tag_ids, exclude_tag_ids, strict/loose matching, heat range, sort order (random/duration/recent/heat), seed-based random, name search, true_random cache blacklisting
+- `GET /api/media` — filtered, paginated media with model_ids, tag_ids, exclude_tag_ids, strict/loose matching, heat range, `media_kind` (image/video/audio), sort order (random/duration/recent/heat), seed-based random, name search, true_random cache blacklisting
 - `GET /api/media/{file_id}/position` — find a file's page/rank in current filter context
 - `POST /api/media/:id/like`, `/dislike` — increment/decrement heat
 
@@ -186,6 +189,7 @@ The server uses a **module-level singleton** `db = Database()` — no FastAPI `D
 **Bulk operations:**
 - `POST /api/files/bulk/add_tags`, `/remove_tags` — bulk add/remove tags; returns `{updated, skipped, errors}` (not transactional)
 - `POST /api/files/bulk/heat` — bulk heat adjustment
+- `POST /api/files/bulk/media-kind` — batch set `media_kind` to image/video/audio/other, for manually correcting unrecognized files
 
 **Metadata:**
 - `GET /api/models`, `GET /api/tags`, `GET /api/model_types` — metadata with file counts

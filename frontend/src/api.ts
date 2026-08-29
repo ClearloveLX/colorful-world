@@ -1,4 +1,4 @@
-import type { Model, Tag, MediaItem } from './types'
+import type { MediaKind, Model, Tag, MediaItem } from './types'
 
 const API_BASE = '/api'
 
@@ -86,6 +86,7 @@ export type MediaQuery = {
   order?: 'recent' | 'recent_asc' | 'random' | 'duration' | 'duration_asc' | 'heat' | 'heat_asc'
   seed?: number
   name?: string
+  media_kind?: MediaKind | 'all'
   edit_mode?: boolean
   true_random?: boolean
   /** keyset 游标（"v1|v2|v3"，与 ORDER BY 列对应），提供时服务端忽略 page/offset */
@@ -119,6 +120,7 @@ export type PositionQuery = {
   min_heat?: number
   max_heat?: number
   name?: string
+  media_kind?: MediaKind | 'all'
   page_size?: number
 }
 
@@ -138,6 +140,7 @@ export async function fetchFilePosition(fileId: string, params: PositionQuery): 
     max_heat: params.max_heat,
     order: params.order,
     name: (params.name ?? '').trim() || undefined,
+    media_kind: params.media_kind && params.media_kind !== 'all' ? params.media_kind : undefined,
     page_size: params.page_size ?? 30,
   })
   const url = `/media/${encodeURIComponent(fileId)}/position?${s}`
@@ -157,6 +160,7 @@ export async function fetchMedia(params: MediaQuery, signal?: AbortSignal): Prom
     order: params.order,
     seed: params.seed,
     name: (params.name ?? '').trim() || undefined,
+    media_kind: params.media_kind && params.media_kind !== 'all' ? params.media_kind : undefined,
     edit_mode: params.edit_mode,
     true_random: params.true_random,
     cursor: params.cursor,
@@ -197,6 +201,16 @@ export async function bulkBlacklist(fileIds: string[]): Promise<{ ok: boolean; u
     method: 'POST',
     headers: { 'Content-Type':'application/json' },
     body: JSON.stringify({ file_ids: fileIds })
+  })
+  if (!r.ok) throw new Error(String(r.status))
+  return r.json()
+}
+
+export async function bulkSetMediaKind(fileIds: string[], mediaKind: MediaKind): Promise<{ ok: boolean; updated: number; media_kind: MediaKind }> {
+  const r = await fetch(`${API_BASE}/files/bulk/media-kind`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_ids: fileIds, media_kind: mediaKind }),
   })
   if (!r.ok) throw new Error(String(r.status))
   return r.json()

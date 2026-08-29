@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { MediaItem } from '../types'
 import { likeMedia, dislikeMedia } from '../api'
-import { formatDurationZh, formatFileSize, isVideoFile } from '../utils/format'
+import { formatDurationZh, formatFileSize, isAudioMedia, isVideoFile, mediaKindOf } from '../utils/format'
 
 type Props = {
   item: MediaItem
@@ -18,7 +18,10 @@ type Props = {
 }
 
 function MediaCard({ item, index, onOpen, onOpenSystem, onLocate, highlighted, onTagClick, onModelClick, selectable, selected, onSelectToggle }: Props) {
-  const isVideo = isVideoFile(item.file_type)
+  const mediaKind = mediaKindOf(item.file_type, item.media_kind)
+  const isVideo = mediaKind === 'video' || (mediaKind === 'unknown' && isVideoFile(item.file_type))
+  const isAudio = isAudioMedia(item.file_type, item.media_kind)
+  const hasPlayback = isVideo || isAudio
   const cover = item.thumbnail_path || item.file_path
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [ripple, setRipple] = useState<{x:number;y:number;key:number}|null>(null)
@@ -260,10 +263,21 @@ function MediaCard({ item, index, onOpen, onOpenSystem, onLocate, highlighted, o
             </span>
           </div>
         )}
-        {isVideo && (
-          <div className="play-badge"><div className="dot">▶</div></div>
+        {isAudio && !isVideo && (
+          <div className="video-corner audio">
+            <span className="video-corner-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M9 18V6l12-2v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="6" cy="18" r="3" fill="currentColor" />
+                <circle cx="18" cy="16" r="3" fill="currentColor" />
+              </svg>
+            </span>
+          </div>
         )}
-        {isVideo && typeof item.duration_ms === 'number' && item.duration_ms > 0 && (
+        {hasPlayback && (
+          <div className="play-badge"><div className="dot">{isAudio && !isVideo ? '♫' : '▶'}</div></div>
+        )}
+        {hasPlayback && typeof item.duration_ms === 'number' && item.duration_ms > 0 && (
           <div className="duration">{formatDurationZh(item.duration_ms)}</div>
         )}
       </div>
@@ -298,8 +312,8 @@ function MediaCard({ item, index, onOpen, onOpenSystem, onLocate, highlighted, o
         <div className="meta card-meta-row">
           {(() => {
             const size = formatFileSize(sizeOverride ?? item.file_size)
-            const dur = isVideo ? formatDurationZh(item.duration_ms) : null
-            const text = isVideo ? [size, dur].filter(Boolean).join(' · ') : size
+            const dur = hasPlayback ? formatDurationZh(item.duration_ms) : null
+            const text = hasPlayback ? [size, dur].filter(Boolean).join(' · ') : size
             return text ? (<span className="card-tag">{text}</span>) : null
           })()}
         </div>

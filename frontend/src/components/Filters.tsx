@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchModels, fetchTags, recalcTagCounts } from '../api'
-import type { Model, Tag } from '../types'
+import type { MediaKind, Model, Tag } from '../types'
 import WhaleMark from './WhaleMark'
 import { toggleGroupOpen } from '../utils/toggleGroupOpen'
+import { MEDIA_KIND_LABELS } from '../utils/format'
 import { CARD_WIDTH_MAX, CARD_WIDTH_MIN, CARD_WIDTH_STEP } from '../utils/cardWidth'
 
 type Props = {
@@ -20,6 +21,8 @@ type Props = {
   onOrderChange: (order: 'random' | 'duration' | 'duration_asc' | 'recent' | 'recent_asc' | 'heat' | 'heat_asc') => void
   nameSearch: string
   onNameSearchChange: (q: string) => void
+  mediaKind: MediaKind | 'all'
+  onMediaKindChange: (kind: MediaKind | 'all') => void
   onRandomizeSeed?: () => void
   onRandomModeChange: (mode: 'random' | 'true_random') => void
   trueRandomCacheEnabled: boolean
@@ -48,6 +51,8 @@ export default function Filters({
   onOrderChange,
   nameSearch,
   onNameSearchChange,
+  mediaKind,
+  onMediaKindChange,
   onRandomizeSeed,
   onRandomModeChange,
   trueRandomCacheEnabled,
@@ -274,6 +279,19 @@ export default function Filters({
               <input type="checkbox" checked={strict} onChange={e => onChange(selectedModels, selectedTags, excludedTags, e.target.checked)} />
               <span>强关联</span>
             </label>
+            <div className="filter-kind-seg" role="group" aria-label="媒体类型">
+              {(['all', 'image', 'video', 'audio', 'unknown'] as const).map(kind => (
+                <button
+                  key={kind}
+                  type="button"
+                  className={`filter-kind-btn${mediaKind === kind ? ' active' : ''}`}
+                  onClick={() => onMediaKindChange(kind)}
+                  title={`仅显示${MEDIA_KIND_LABELS[kind]}文件`}
+                >
+                  {MEDIA_KIND_LABELS[kind]}
+                </button>
+              ))}
+            </div>
             <div className="filter-heat-stack">
               <div className="filter-heat-label">热度</div>
               <div className="filter-heat-row">
@@ -382,9 +400,8 @@ export default function Filters({
             aria-label="刷新模特"
             onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshModels(); }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-              <polyline points="21 3 21 9 15 9" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-8 8s3.57 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
             </svg>
           </button>
         </div>
@@ -451,9 +468,8 @@ export default function Filters({
             aria-label="刷新标签"
             onClick={(e) => { e.stopPropagation(); e.currentTarget.blur(); refreshTags(); }}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-              <polyline points="21 3 21 9 15 9" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-8 8s3.57 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
             </svg>
           </button>
         </div>

@@ -25,6 +25,12 @@ from typing import List
 from pydantic import BaseModel
 
 from backend.data.database import Database, resolve_abs
+from backend.services.media_detector import (
+    MEDIA_KIND_AUDIO,
+    MEDIA_KIND_IMAGE,
+    MEDIA_KIND_UNKNOWN,
+    MEDIA_KIND_VIDEO,
+)
 
 # CORS 白名单：生产同源访问不经过 CORS；仅 Vite dev (4398→4396) 与同源端口需要放行
 _ALLOWED_ORIGINS = [
@@ -136,12 +142,31 @@ def _normalize_media_type(media_type: str) -> str:
         raise HTTPException(status_code=400, detail='media_type 仅支持 image 或 video')
     return value
 
+
+def _normalize_media_kind(media_kind: Optional[str]) -> Optional[str]:
+    value = (media_kind or '').strip().lower()
+    if not value or value == 'all':
+        return None
+    if value in {MEDIA_KIND_IMAGE, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, MEDIA_KIND_UNKNOWN}:
+        return value
+    raise HTTPException(status_code=400, detail='media_kind 仅支持 image / video / audio / other / all')
+
+
+def _normalize_assignable_media_kind(media_kind: str) -> str:
+    value = (media_kind or '').strip().lower()
+    if value in {MEDIA_KIND_IMAGE, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO}:
+        return value
+    if value in {'other', 'unknown', ''}:
+        return MEDIA_KIND_UNKNOWN
+    raise HTTPException(status_code=400, detail='可手动设置的 media_kind 仅支持 image / video / audio / other')
+
+
 def _handle_preset_error(exc: Exception):
     if isinstance(exc, KeyError):
         raise HTTPException(status_code=404, detail=str(exc).strip("'"))
     raise HTTPException(status_code=400, detail=str(exc))
 
-def _build_true_random_cache_key(model_ids, tag_ids, exclude_tag_ids, strict, min_heat, max_heat, name):
+def _build_true_random_cache_key(model_ids, tag_ids, exclude_tag_ids, strict, min_heat, max_heat, name, media_kind):
     payload = {
         "model_ids": sorted([str(v) for v in (model_ids or []) if str(v).strip()]),
         "tag_ids": sorted([str(v) for v in (tag_ids or []) if str(v).strip()]),
@@ -150,6 +175,7 @@ def _build_true_random_cache_key(model_ids, tag_ids, exclude_tag_ids, strict, mi
         "min_heat": min_heat,
         "max_heat": max_heat,
         "name": (name or '').strip().lower(),
+        "media_kind": media_kind or None,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return hashlib.md5(raw.encode('utf-8')).hexdigest()
@@ -236,6 +262,7 @@ def recalc_tag_counts():
     """全量重算 tags.file_count（直接关联 ∪ 模特继承去重），纠正增量维护漂移"""
     db.recalc_tag_file_counts()
     return {"ok": True}
+
 
 class PresetPayload(BaseModel):
     name: str
@@ -353,11 +380,13 @@ def get_media(
     edit_mode: bool = False,
     true_random: bool = False,
     cursor: Optional[str] = Query(default=None),
+    media_kind: Optional[str] = Query(default=None),
 ):
     try:
         mset = [s for s in (model_ids or '').split(',') if s]
         tset = [s for s in (tag_ids or '').split(',') if s]
         exset = [s for s in (exclude_tag_ids or '').split(',') if s]
+        kind = _normalize_media_kind(media_kind)
         effective_order = order or 'recent'
         cache_enabled = db.get_true_random_cache_enabled()
         use_true_random_cache = bool(edit_mode and true_random and effective_order == 'random' and cache_enabled)
@@ -371,6 +400,7 @@ def get_media(
                 min_heat=min_heat,
                 max_heat=max_heat,
                 name=name,
+                media_kind=kind,
             )
         offset = 0 if use_true_random_cache else max((page - 1) * page_size, 0)
         rows = db.query_files_with_filters(
@@ -387,6 +417,7 @@ def get_media(
             name=name,
             blacklist_cache_key=blacklist_cache_key,
             cursor=(cursor or None) if effective_order in ('recent', 'recent_asc', 'duration', 'duration_asc', 'heat', 'heat_asc') else None,
+            media_kind=kind,
         )
         if use_true_random_cache and rows:
             db.cache_true_random_results(blacklist_cache_key, [row.get('id') for row in rows if row.get('id')])
@@ -450,9 +481,16 @@ def get_media(
                 except Exception:
                     sz = None
             ft = (f.get("file_type") or "").lower()
+            fk = (f.get("media_kind") or "").lower()
             thumb = f.get("thumbnail_path")
-            if (ft in ("mp3", "m4a")) and not thumb:
+            if (fk == MEDIA_KIND_AUDIO or ft in ("mp3", "m4a")) and not thumb:
                 svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#eef6ff"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#2563eb" font-size="72">♫</text></svg>'
+                try:
+                    thumb = "data:image/svg+xml," + urllib.parse.quote(svg)
+                except Exception:
+                    thumb = None
+            elif fk == MEDIA_KIND_VIDEO and not thumb:
+                svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="100%" height="100%" fill="#101014"/><polygon points="250,135 400,180 250,225" fill="#b89a67"/></svg>'
                 try:
                     thumb = "data:image/svg+xml," + urllib.parse.quote(svg)
                 except Exception:
@@ -462,6 +500,7 @@ def get_media(
                 "title": f.get("original_file_name") or f.get("file_name") or f.get("id"),
                 "file_path": to_url(f.get("file_path")),
                 "file_type": f.get("file_type") or "unknown",
+                "media_kind": f.get("media_kind") or MEDIA_KIND_UNKNOWN,
                 "thumbnail_path": to_url(thumb if thumb else f.get("thumbnail_path")),
                 "file_size": sz,
                 "image_width": f.get("image_width"),
@@ -724,10 +763,12 @@ def get_file_position(
     order: Optional[str] = Query(default=None),
     name: Optional[str] = Query(default=None),
     page_size: int = 30,
+    media_kind: Optional[str] = Query(default=None),
 ):
     """返回文件在给定筛选+排序下的页码和排位"""
     try:
         effective_order = order or 'recent'
+        kind = _normalize_media_kind(media_kind)
         if page_size < 1:
             raise HTTPException(status_code=400, detail="page_size 必须 >= 1")
         mset = [s for s in (model_ids or '').split(',') if s]
@@ -743,6 +784,7 @@ def get_file_position(
             max_heat=max_heat,
             name=name,
             order=effective_order,
+            media_kind=kind,
         )
         if rank is None:
             raise HTTPException(status_code=404, detail="文件不在当前筛选结果中")
@@ -849,6 +891,11 @@ class BulkHeatOp(BaseModel):
     file_ids: List[str]
     delta: int
 
+
+class BulkMediaKindOp(BaseModel):
+    file_ids: List[str]
+    media_kind: str
+
 @app.post("/api/files/bulk/add_tags")
 def bulk_add_tags(payload: BulkTagOp):
     return _bulk_apply_tags(payload.file_ids, payload.tag_ids, db.add_file_tag)
@@ -861,6 +908,13 @@ def bulk_remove_tags(payload: BulkTagOp):
 def bulk_update_heat(payload: BulkHeatOp):
     delta = 1 if payload.delta >= 0 else -1
     return _bulk_update_heat(payload.file_ids, delta)
+
+
+@app.post("/api/files/bulk/media-kind")
+def bulk_set_media_kind(payload: BulkMediaKindOp):
+    media_kind = _normalize_assignable_media_kind(payload.media_kind)
+    updated = db.update_files_media_kind(payload.file_ids, media_kind)
+    return {"ok": True, "updated": updated, "media_kind": media_kind}
 
 class BulkBlacklistOp(BaseModel):
     file_ids: List[str]

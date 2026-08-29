@@ -12,6 +12,33 @@ from datetime import datetime
 from pathlib import Path
 from PIL import Image
 
+# 与 simple_server 的 dual import 路径保持一致：
+# 直接以 data.database 运行时用 services.media_detector，作为 backend.data.database 导入时用 backend.services.media_detector。
+try:
+    from backend.services.media_detector import (  # type: ignore
+        MEDIA_KIND_AUDIO,
+        MEDIA_KIND_IMAGE,
+        MEDIA_KIND_UNKNOWN,
+        MEDIA_KIND_VIDEO,
+        AUDIO_EXTENSIONS,
+        IMAGE_EXTENSIONS,
+        VIDEO_EXTENSIONS,
+        detect_media_file,
+        media_kind_from_extension,
+    )
+except Exception:  # pragma: no cover - 仅在旧式 data.* 导入路径下触发
+    from services.media_detector import (  # type: ignore
+        MEDIA_KIND_AUDIO,
+        MEDIA_KIND_IMAGE,
+        MEDIA_KIND_UNKNOWN,
+        MEDIA_KIND_VIDEO,
+        AUDIO_EXTENSIONS,
+        IMAGE_EXTENSIONS,
+        VIDEO_EXTENSIONS,
+        detect_media_file,
+        media_kind_from_extension,
+    )
+
 
 def compute_md5(file_path):
     """分块计算文件 MD5(4096 字节),返回 hexdigest。
@@ -315,6 +342,7 @@ class Database:
                 file_size INTEGER,
                 md5 TEXT,
                 file_type TEXT,
+                media_kind TEXT,
                 thumbnail_path TEXT,
                 image_width INTEGER,
                 image_height INTEGER,
@@ -353,6 +381,31 @@ class Database:
             columns = [col[1] for col in cursor.fetchall()]
             if 'file_type' not in columns:
                 cursor.execute('ALTER TABLE files ADD COLUMN file_type TEXT')
+        except Exception:
+            pass
+
+        # 检查并添加 media_kind 字段（图片/音频/视频自动识别结果）
+        try:
+            cursor.execute("PRAGMA table_info(files)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'media_kind' not in columns:
+                cursor.execute('ALTER TABLE files ADD COLUMN media_kind TEXT')
+            # 存量记录按 file_type 扩展名回填空缺值；新增文件在 add_file 时已做内容识别。
+            # 这里对 NULL 幂等补齐，兼容列已存在但尚未回填的中间状态。
+            def _backfill_kind(kind, extensions):
+                values = sorted({str(e).lower().lstrip('.') for e in extensions if str(e).lstrip('.')})
+                if not values:
+                    return
+                placeholders = ','.join(['?'] * len(values))
+                cursor.execute(
+                    f"UPDATE files SET media_kind = ? WHERE media_kind IS NULL "
+                    f"AND LOWER(COALESCE(file_type, '')) IN ({placeholders})",
+                    [kind] + values,
+                )
+            _backfill_kind(MEDIA_KIND_IMAGE, IMAGE_EXTENSIONS)
+            _backfill_kind(MEDIA_KIND_VIDEO, VIDEO_EXTENSIONS)
+            _backfill_kind(MEDIA_KIND_AUDIO, AUDIO_EXTENSIONS)
+            cursor.execute("UPDATE files SET media_kind = ? WHERE media_kind IS NULL", [MEDIA_KIND_UNKNOWN])
         except Exception:
             pass
 
@@ -474,6 +527,7 @@ class Database:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_models_sort_order ON models(sort_order)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_tags_sort_order ON tags(sort_order)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_file_type ON files(file_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_files_media_kind ON files(media_kind)')
         # COALESCE 表达式索引必须与查询中的 ORDER BY 表达式逐字一致,SQLite 才能命中。
         # 旧单列 duration 索引已由下方复合索引覆盖排序需求;heat 单列索引保留给范围筛选。
         try:
@@ -1697,7 +1751,7 @@ class Database:
     
     # ========== 文件相关操作 ==========
     
-    def add_file(self, file_path, file_name=None, file_size=None, md5_value=None):
+    def add_file(self, file_path, file_name=None, file_size=None, md5_value=None, media_kind=None):
         """添加文件记录，自动计算MD5值
 
         md5_value: 外部已算好的 MD5 时传入,跳过文件读取(避免大文件重复计算)。
@@ -1717,6 +1771,13 @@ class Database:
             except Exception:
                 pass
 
+        # 自动识别文件类别（优先文件头魔数，失败回退扩展名）
+        if media_kind is None:
+            try:
+                media_kind = (detect_media_file(raw_path) or {}).get('kind') or MEDIA_KIND_UNKNOWN
+            except Exception:
+                media_kind = media_kind_from_extension(file_name or raw_path)
+
         file_path = to_rel(raw_path)
         with self.transaction() as conn:
             cursor = conn.cursor()
@@ -1726,9 +1787,9 @@ class Database:
             file_type = ext or 'unknown'
             try:
                 cursor.execute('''
-                    INSERT INTO files (id, file_path, file_name, original_file_name, file_size, md5, file_type, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (file_id, file_path, file_name, original_file_name, file_size, md5_value, file_type, now, now))
+                    INSERT INTO files (id, file_path, file_name, original_file_name, file_size, md5, file_type, media_kind, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (file_id, file_path, file_name, original_file_name, file_size, md5_value, file_type, media_kind, now, now))
                 return file_id
             except sqlite3.IntegrityError:
                 cursor.execute('SELECT id FROM files WHERE file_path = ?', (file_path,))
@@ -1760,7 +1821,7 @@ class Database:
     def get_file_by_id(self, file_id):
         return self._query('SELECT * FROM files WHERE id = ?', (file_id,), fetch='one')
     
-    def update_file(self, file_id, file_path=None, file_name=None, file_size=None, file_type=None):
+    def update_file(self, file_id, file_path=None, file_name=None, file_size=None, file_type=None, media_kind=None):
         """更新文件记录"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -1783,6 +1844,7 @@ class Database:
         params = []
 
         if file_path is not None:
+            raw_file_path = file_path
             file_path = to_rel(file_path)  # 入库统一 data/ 相对
             updates.append('file_path = ?')
             params.append(file_path)
@@ -1792,6 +1854,11 @@ class Database:
                     file_type = ext or 'unknown'
                 except Exception:
                     file_type = None
+            if media_kind is None:
+                try:
+                    media_kind = (detect_media_file(raw_file_path) or {}).get('kind') or MEDIA_KIND_UNKNOWN
+                except Exception:
+                    media_kind = media_kind_from_extension(raw_file_path)
         if file_name is not None:
             updates.append('file_name = ?')
             params.append(file_name)
@@ -1802,6 +1869,10 @@ class Database:
         if file_type is not None:
             updates.append('file_type = ?')
             params.append(file_type)
+
+        if media_kind is not None:
+            updates.append('media_kind = ?')
+            params.append(media_kind)
 
         if not updates:
             conn.close()
@@ -1825,6 +1896,75 @@ class Database:
         conn.close()
         return True
     
+    def get_files_by_paths(self, file_paths):
+        """批量查询已入库路径，返回 {入库相对路径: file_id}。
+
+        扫描识别页面用它与磁盘文件做去重，避免对每个文件单独开连接查询。
+        """
+        result = {}
+        paths = list(dict.fromkeys([to_rel(str(p)) for p in (file_paths or []) if p]))
+        if not paths:
+            return result
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            for i in range(0, len(paths), 900):
+                chunk = paths[i:i + 900]
+                placeholders = ','.join(['?'] * len(chunk))
+                cursor.execute(f'SELECT id, file_path FROM files WHERE file_path IN ({placeholders})', chunk)
+                for row in cursor.fetchall():
+                    result[row['file_path']] = row['id']
+        finally:
+            conn.close()
+        return result
+
+    def update_file_media_kind(self, file_id, media_kind=None, file_path=None):
+        """更新（或重新识别）单个文件的 media_kind。"""
+        if media_kind is None:
+            path = file_path
+            if path is None:
+                row = self.get_file_by_id(file_id)
+                path = row.get('file_path') if row else None
+                if path:
+                    path = resolve_abs(path)
+            if path:
+                media_kind = (detect_media_file(path) or {}).get('kind') or MEDIA_KIND_UNKNOWN
+        if media_kind not in (MEDIA_KIND_IMAGE, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, MEDIA_KIND_UNKNOWN):
+            media_kind = MEDIA_KIND_UNKNOWN
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE files SET media_kind = ?, updated_at = ? WHERE id = ?', (media_kind, datetime.now().isoformat(), file_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+    def update_files_media_kind(self, file_ids, media_kind):
+        """批量手动设置多个文件的 media_kind。"""
+        ids = list(dict.fromkeys([str(fid) for fid in (file_ids or []) if str(fid)]))
+        if not ids:
+            return 0
+        if media_kind not in (MEDIA_KIND_IMAGE, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, MEDIA_KIND_UNKNOWN):
+            media_kind = MEDIA_KIND_UNKNOWN
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().isoformat()
+            updated = 0
+            for i in range(0, len(ids), 900):
+                chunk = ids[i:i + 900]
+                placeholders = ','.join(['?'] * len(chunk))
+                cursor.execute(
+                    f'UPDATE files SET media_kind = ?, updated_at = ? WHERE id IN ({placeholders})',
+                    [media_kind, now] + chunk,
+                )
+                updated += cursor.rowcount
+            conn.commit()
+            return updated
+        finally:
+            conn.close()
+
     def update_original_file_name(self, file_id, original_file_name):
         with self.transaction() as conn:
             cursor = conn.cursor()
@@ -2454,7 +2594,7 @@ class Database:
         self._true_random_count_cache = (total, now + 2.0)
         return total
 
-    def _build_file_filter_clauses(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, name=None):
+    def _build_file_filter_clauses(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, name=None, media_kind=None):
         """构建 files 筛选 WHERE 子句(列表)与参数,供分页查询和排位查询共用。
 
         - 传入 id 先去重,避免严格匹配 COUNT(DISTINCT ...) 因重复参数改变语义。
@@ -2474,6 +2614,12 @@ class Database:
                          'LOWER(f.file_path) LIKE ?'
                          ')')
             params.extend([q, q, q])
+        if media_kind in (MEDIA_KIND_IMAGE, MEDIA_KIND_VIDEO, MEDIA_KIND_AUDIO, MEDIA_KIND_UNKNOWN):
+            if media_kind == MEDIA_KIND_UNKNOWN:
+                where.append('(f.media_kind = ? OR f.media_kind IS NULL)')
+            else:
+                where.append('f.media_kind = ?')
+            params.append(media_kind)
         if min_heat is not None:
             where.append('f.heat_value >= ?')
             params.append(int(min_heat))
@@ -2541,7 +2687,7 @@ class Database:
                 row_map[r['id']] = dict(r)
         return [row_map[fid] for fid in file_ids if fid in row_map]
 
-    def query_files_with_filters(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, offset=0, limit=30, order='recent', seed=None, name=None, blacklist_cache_key=None, cursor=None):
+    def query_files_with_filters(self, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, offset=0, limit=30, order='recent', seed=None, name=None, blacklist_cache_key=None, cursor=None, media_kind=None):
         """按筛选条件分页查询文件，支持严格/任意匹配与排序；当提供 seed 且 order=random 时，使用可复现的伪随机顺序
 
         cursor: 游标分页键（keyset），形如 "v1|v2|v3"，各段与 ORDER BY 列一一对应
@@ -2559,6 +2705,7 @@ class Database:
             min_heat=min_heat,
             max_heat=max_heat,
             name=name,
+            media_kind=media_kind,
         )
         if blacklist_cache_key:
             where.append('NOT EXISTS (SELECT 1 FROM true_random_cache trc WHERE trc.cache_key = ? AND trc.file_id = f.id)')
@@ -2649,6 +2796,7 @@ class Database:
                 and not tag_ids
                 and not exclude_tag_ids
                 and not name
+                and media_kind is None
                 and min_heat is None
                 and max_heat is None
                 and seed is None
@@ -2708,6 +2856,8 @@ class Database:
             sql += ' ORDER BY COALESCE(f.heat_value, 0) ASC, f.created_at DESC, f.id'
         elif order == 'recent_asc':
             sql += ' ORDER BY f.created_at ASC, f.id'
+        elif order == 'name':
+            sql += " ORDER BY COALESCE(NULLIF(f.original_file_name, ''), f.file_name) COLLATE NOCASE ASC, f.id"
         else:
             sql += ' ORDER BY f.created_at DESC, f.id'
         # 游标分页：LIMIT 不带 OFFSET；无游标时退回 OFFSET 分页
@@ -2721,7 +2871,7 @@ class Database:
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         return rows
-    def get_file_rank(self, file_id, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, name=None, order='recent'):
+    def get_file_rank(self, file_id, model_ids=None, tag_ids=None, exclude_tag_ids=None, strict=True, min_heat=None, max_heat=None, name=None, order='recent', media_kind=None):
         """返回文件在给定筛选+排序下的 0-based 排位；仅支持 SQL 原生排序，不支持 random / seed 排序
 
         用「统计排在该文件之前的行数」代替 ROW_NUMBER() 全表窗口,
@@ -2740,6 +2890,7 @@ class Database:
             min_heat=min_heat,
             max_heat=max_heat,
             name=name,
+            media_kind=media_kind,
         )
         # 先取目标行的排序字段;文件不存在时与旧实现一致返回 None
         cursor.execute('SELECT id, created_at, duration_ms, heat_value FROM files WHERE id = ?', (file_id,))

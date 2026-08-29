@@ -1,5 +1,7 @@
 export type ID = string
 
+export type MediaKind = 'image' | 'video' | 'audio' | 'unknown'
+
 export type Model = {
   id: ID
   name: string
@@ -20,6 +22,7 @@ export type MediaItem = {
   title: string
   file_path: string
   file_type: string
+  media_kind?: MediaKind | null
   file_size?: number | null
   thumbnail_path?: string | null
   image_width?: number | null
