@@ -1,6 +1,6 @@
 # ColorfulWorld
 
-一个本地的图片/视频/音频管理标记与筛选的前后端项目，启动后访问 http://localhost:4396/ 进行使用。
+一个本地的图片/视频/音频管理标记与筛选的前后端项目，启动后访问 http://localhost:4396/ 进行使用（前端开发模式为 http://localhost:4398/）。
 
 ## 功能特性
 
@@ -19,7 +19,7 @@
 | 层 | 技术 |
 |----|------|
 | 后端 | Python / FastAPI / uvicorn (端口 4396) |
-| 前端 | React 18 + TypeScript + Vite (dev 端口 4398) |
+| 前端 | React 18 + TypeScript + Vite（开发服务器 4398；生产/联调访问入口为后端 4396，由后端托管前端构建产物） |
 | 数据库 | SQLite (WAL 模式，自动迁移) |
 | 辅助服务 | open_helper (端口 4397，用户会话内打开系统应用) |
 | 依赖 | opencv-python、Pillow、numpy、mutagen |
